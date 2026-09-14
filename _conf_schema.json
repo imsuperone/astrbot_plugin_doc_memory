@@ -1,0 +1,38 @@
+{
+  "chunk_size": {
+    "description": "文档切片长度（字符数）",
+    "hint": "段落优先切分，超出此长度自动截断。建议 1500 兼顾效果与 token 消耗。",
+    "type": "int",
+    "default": 1500
+  },
+  "chunk_overlap": {
+    "description": "切片重叠字符数",
+    "hint": "保留上下文连贯性，建议为 chunk_size 的 10%~20%。",
+    "type": "int",
+    "default": 200
+  },
+  "top_k": {
+    "description": "单次检索注入片段数量",
+    "hint": "建议 3~5 片段，避免挤占模型上下文。",
+    "type": "int",
+    "default": 3
+  },
+  "max_inject_chars": {
+    "description": "单次注入最大字符上限",
+    "hint": "防止提示词过长超出大模型单次承载能力。",
+    "type": "int",
+    "default": 6000
+  },
+  "auto_inject": {
+    "description": "自动检索与上下文注入",
+    "hint": "开启后在模型对话前自动检索相关片段注入。",
+    "type": "bool",
+    "default": true
+  },
+  "allow_private_bind": {
+    "description": "允许私聊会话独立绑定",
+    "hint": "关闭后仅群聊生效。",
+    "type": "bool",
+    "default": true
+  }
+}

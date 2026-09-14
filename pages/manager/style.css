@@ -1,0 +1,1298 @@
+/* Android 16 (Material 3 Expressive) Theme & Design Tokens */
+:root {
+  /* Color Palette - Light (M3 Dynamic Tonal) */
+  --md-sys-color-primary: #006684;
+  --md-sys-color-on-primary: #ffffff;
+  --md-sys-color-primary-container: #bde9ff;
+  --md-sys-color-on-primary-container: #001f2a;
+  --md-sys-color-secondary: #4d616c;
+  --md-sys-color-secondary-container: #d0e6f2;
+  --md-sys-color-on-secondary-container: #081e27;
+  --md-sys-color-tertiary: #5d5b7d;
+  --md-sys-color-tertiary-container: #e3dfff;
+  --md-sys-color-on-tertiary-container: #1a1836;
+  --md-sys-color-error: #ba1a1a;
+  --md-sys-color-error-container: #ffdad6;
+  --md-sys-color-on-error-container: #410002;
+  --md-sys-color-background: #fbfcfe;
+  --md-sys-color-on-background: #191c1e;
+  --md-sys-color-surface: #fbfcfe;
+  --md-sys-color-on-surface: #191c1e;
+  --md-sys-color-surface-variant: #dce4e9;
+  --md-sys-color-on-surface-variant: #40484c;
+  --md-sys-color-outline: #70787d;
+  --md-sys-color-outline-variant: #bfc8cd;
+  --md-sys-color-surface-container-lowest: #ffffff;
+  --md-sys-color-surface-container-low: #f5f6f8;
+  --md-sys-color-surface-container: #eff1f3;
+  --md-sys-color-surface-container-high: #e9ebed;
+  --md-sys-color-surface-container-highest: #e3e5e7;
+
+  /* Tag colors */
+  --tag-md: #6750a4;
+  --tag-md-bg: #eaddff;
+  --tag-pdf: #b3261e;
+  --tag-pdf-bg: #f9dedc;
+  --tag-doc: #00639b;
+  --tag-doc-bg: #c2e7ff;
+  --tag-txt: #006a6a;
+  --tag-txt-bg: #6ff7f6;
+  
+  /* Shapes & Roundness */
+  --md-shape-xs: 4px;
+  --md-shape-s: 8px;
+  --md-shape-m: 12px;
+  --md-shape-l: 16px;
+  --md-shape-xl: 24px;
+  --md-shape-xxl: 28px;
+  --md-shape-full: 9999px;
+
+  /* Elevation Shadows */
+  --md-elevation-1: 0 1px 3px 1px rgba(0, 0, 0, 0.08), 0 1px 2px 0 rgba(0, 0, 0, 0.05);
+  --md-elevation-2: 0 2px 6px 2px rgba(0, 0, 0, 0.08), 0 1px 2px 0 rgba(0, 0, 0, 0.04);
+  --md-elevation-3: 0 4px 12px 3px rgba(0, 0, 0, 0.08), 0 1px 3px 0 rgba(0, 0, 0, 0.05);
+  --md-elevation-4: 0 8px 24px 4px rgba(0, 0, 0, 0.1), 0 2px 6px 0 rgba(0, 0, 0, 0.06);
+
+  /* Typography */
+  --font-family: -apple-system, BlinkMacSystemFont, "Google Sans", "Segoe UI", Roboto, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+}
+
+[data-theme="dark"] {
+  --md-sys-color-primary: #65d3ff;
+  --md-sys-color-on-primary: #003546;
+  --md-sys-color-primary-container: #004d65;
+  --md-sys-color-on-primary-container: #bde9ff;
+  --md-sys-color-secondary: #b4cad6;
+  --md-sys-color-secondary-container: #354a54;
+  --md-sys-color-on-secondary-container: #d0e6f2;
+  --md-sys-color-tertiary: #c6c2ea;
+  --md-sys-color-tertiary-container: #454464;
+  --md-sys-color-on-tertiary-container: #e3dfff;
+  --md-sys-color-error: #ffb4ab;
+  --md-sys-color-error-container: #93000a;
+  --md-sys-color-on-error-container: #ffdad6;
+  --md-sys-color-background: #111415;
+  --md-sys-color-on-background: #e1e3e5;
+  --md-sys-color-surface: #111415;
+  --md-sys-color-on-surface: #e1e3e5;
+  --md-sys-color-surface-variant: #40484c;
+  --md-sys-color-on-surface-variant: #bfc8cd;
+  --md-sys-color-outline: #8a9297;
+  --md-sys-color-outline-variant: #40484c;
+  --md-sys-color-surface-container-lowest: #0c0e10;
+  --md-sys-color-surface-container-low: #191c1e;
+  --md-sys-color-surface-container: #1d2022;
+  --md-sys-color-surface-container-high: #272a2d;
+  --md-sys-color-surface-container-highest: #323538;
+
+  --tag-md: #d0bcff;
+  --tag-md-bg: #4f378b;
+  --tag-pdf: #ffb4ab;
+  --tag-pdf-bg: #690005;
+  --tag-doc: #a8c7fa;
+  --tag-doc-bg: #004a77;
+  --tag-txt: #4fd8d8;
+  --tag-txt-bg: #004f4f;
+
+  --md-elevation-1: 0 1px 3px 1px rgba(0, 0, 0, 0.35);
+  --md-elevation-2: 0 2px 8px 2px rgba(0, 0, 0, 0.45);
+  --md-elevation-3: 0 4px 16px 4px rgba(0, 0, 0, 0.55);
+  --md-elevation-4: 0 8px 30px 6px rgba(0, 0, 0, 0.65);
+}
+
+/* Reset & Global */
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  background-color: var(--md-sys-color-background);
+  color: var(--md-sys-color-on-background);
+  font-family: var(--font-family);
+  font-size: 14px;
+  line-height: 1.5;
+  min-height: 100vh;
+  padding-bottom: 80px;
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.app-container {
+  max-width: 1240px;
+  margin: 0 auto;
+  padding: 20px 28px;
+}
+
+/* Header & Top Bar */
+.top-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 0 20px 0;
+}
+
+.top-bar-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.app-icon-badge {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--md-shape-xl);
+  background: linear-gradient(135deg, var(--md-sys-color-primary), var(--md-sys-color-tertiary));
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 24px;
+  box-shadow: var(--md-elevation-2);
+  flex-shrink: 0;
+}
+
+.top-bar-text h1 {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.3px;
+  color: var(--md-sys-color-on-surface);
+  line-height: 1.2;
+}
+
+.top-bar-text p {
+  font-size: 13px;
+  color: var(--md-sys-color-outline);
+  margin-top: 2px;
+}
+
+.top-bar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Android 16 Icon Buttons */
+.icon-btn {
+  width: 40px;
+  height: 40px;
+  border-radius: var(--md-shape-full);
+  border: none;
+  background: var(--md-sys-color-surface-container);
+  color: var(--md-sys-color-on-surface);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
+}
+
+.icon-btn:hover {
+  background: var(--md-sys-color-surface-container-high);
+  transform: scale(1.05);
+}
+
+.icon-btn:active {
+  transform: scale(0.95);
+}
+
+/* Glanceable Stats Card (Android 16 Expressive Widget) */
+.hero-widget-row {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.hero-widget {
+  background: var(--md-sys-color-surface-container-low);
+  border-radius: var(--md-shape-xxl);
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  border: 1px solid transparent;
+  transition: all 0.25s cubic-bezier(0.2, 0, 0, 1);
+}
+
+.hero-widget:hover {
+  border-color: var(--md-sys-color-outline-variant);
+  background: var(--md-sys-color-surface-container);
+}
+
+.hero-widget .widget-label {
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--md-sys-color-outline);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.hero-widget .widget-val {
+  font-size: 26px;
+  font-weight: 800;
+  color: var(--md-sys-color-on-surface);
+  margin-top: 6px;
+  letter-spacing: -0.5px;
+}
+
+/* Android 16 Segmented Pill Navigation Bar */
+.segmented-nav {
+  display: flex;
+  background: var(--md-sys-color-surface-container);
+  padding: 5px;
+  border-radius: var(--md-shape-full);
+  margin-bottom: 22px;
+  position: sticky;
+  top: 12px;
+  z-index: 20;
+  box-shadow: var(--md-elevation-1);
+}
+
+.nav-tab {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 18px;
+  border: none;
+  background: transparent;
+  color: var(--md-sys-color-on-surface-variant);
+  font-family: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  border-radius: var(--md-shape-full);
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
+  white-space: nowrap;
+}
+
+.nav-tab.active {
+  background: var(--md-sys-color-primary);
+  color: var(--md-sys-color-on-primary);
+  box-shadow: var(--md-elevation-2);
+}
+
+.nav-tab:not(.active):hover {
+  background: var(--md-sys-color-surface-container-high);
+  color: var(--md-sys-color-on-surface);
+}
+
+/* Tab Content Sections */
+.tab-pane {
+  display: none;
+  animation: fadeIn 0.25s cubic-bezier(0.2, 0, 0, 1);
+}
+
+.tab-pane.active {
+  display: block;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Material 3 Expressive Card */
+.m3-card {
+  background: var(--md-sys-color-surface-container-lowest);
+  border-radius: var(--md-shape-xxl);
+  padding: 24px;
+  margin-bottom: 20px;
+  box-shadow: var(--md-elevation-1);
+  border: 1px solid var(--md-sys-color-surface-container-high);
+  transition: all 0.25s cubic-bezier(0.2, 0, 0, 1);
+}
+
+.m3-card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 18px;
+}
+
+.m3-card-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--md-sys-color-on-surface);
+}
+
+.m3-card-desc {
+  font-size: 13px;
+  color: var(--md-sys-color-outline);
+  margin-top: 4px;
+}
+
+/* Android 16 Drag-and-Drop Zone (Label element for 100% reliable click-to-upload) */
+.dropzone-container {
+  display: block;
+  border: 2px dashed var(--md-sys-color-outline-variant);
+  border-radius: var(--md-shape-xxl);
+  background: var(--md-sys-color-surface-container-lowest);
+  padding: 32px 24px;
+  text-align: center;
+  cursor: pointer;
+  transition: all 0.25s cubic-bezier(0.2, 0, 0, 1);
+  position: relative;
+  overflow: hidden;
+  user-select: none;
+}
+
+.dropzone-container:hover, .dropzone-container.drag-over {
+  border-color: var(--md-sys-color-primary);
+  background: var(--md-sys-color-primary-container);
+  transform: translateY(-2px);
+}
+
+.dropzone-icon {
+  width: 56px;
+  height: 56px;
+  border-radius: var(--md-shape-full);
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-bottom: 12px;
+  font-size: 26px;
+  transition: transform 0.2s cubic-bezier(0.2, 0, 0, 1);
+}
+
+.dropzone-container:hover .dropzone-icon {
+  transform: scale(1.1);
+  background: var(--md-sys-color-primary);
+  color: var(--md-sys-color-on-primary);
+}
+
+.dropzone-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--md-sys-color-on-surface);
+}
+
+.dropzone-sub {
+  font-size: 13px;
+  color: var(--md-sys-color-outline);
+  margin: 6px 0 14px 0;
+}
+
+.format-tags {
+  display: flex;
+  gap: 6px;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.format-pill {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 3px 10px;
+  border-radius: var(--md-shape-full);
+  background: var(--md-sys-color-surface-container-highest);
+  color: var(--md-sys-color-on-surface-variant);
+  letter-spacing: 0.3px;
+}
+
+/* Uploading progress bar */
+.upload-progress-bar {
+  display: none;
+  height: 4px;
+  width: 100%;
+  background: var(--md-sys-color-surface-container-highest);
+  border-radius: var(--md-shape-full);
+  overflow: hidden;
+  margin-top: 14px;
+}
+
+.upload-progress-fill {
+  height: 100%;
+  width: 0%;
+  background: var(--md-sys-color-primary);
+  transition: width 0.3s ease;
+  animation: indeterminate 1.5s infinite linear;
+}
+
+@keyframes indeterminate {
+  0% { transform: translateX(-100%); width: 50%; }
+  100% { transform: translateX(200%); width: 50%; }
+}
+
+/* Document Search & Filter bar */
+.doc-filter-bar {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.m3-search-box {
+  flex: 1;
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.m3-search-icon {
+  position: absolute;
+  left: 14px;
+  color: var(--md-sys-color-outline);
+  pointer-events: none;
+}
+
+.m3-input {
+  width: 100%;
+  height: 44px;
+  background: var(--md-sys-color-surface-container);
+  border: 1px solid transparent;
+  border-radius: var(--md-shape-full);
+  padding: 0 18px 0 42px;
+  font-family: inherit;
+  font-size: 14px;
+  color: var(--md-sys-color-on-surface);
+  outline: none;
+  transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
+}
+
+.m3-input:focus {
+  background: var(--md-sys-color-surface-container-lowest);
+  border-color: var(--md-sys-color-primary);
+  box-shadow: 0 0 0 3px var(--md-sys-color-primary-container);
+}
+
+/* Document Cards Grid */
+.doc-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+  gap: 16px;
+}
+
+.doc-card {
+  background: var(--md-sys-color-surface-container-lowest);
+  border: 1px solid var(--md-sys-color-surface-container-high);
+  border-radius: var(--md-shape-xl);
+  padding: 18px 20px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  gap: 14px;
+  box-shadow: var(--md-elevation-1);
+  transition: all 0.22s cubic-bezier(0.2, 0, 0, 1);
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.doc-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--md-sys-color-outline-variant);
+  box-shadow: var(--md-elevation-2);
+}
+
+.doc-card-top {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.doc-type-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--md-shape-m);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 800;
+  font-size: 12px;
+  flex-shrink: 0;
+  text-transform: uppercase;
+}
+
+.doc-type-icon.md { background: var(--tag-md-bg); color: var(--tag-md); }
+.doc-type-icon.pdf { background: var(--tag-pdf-bg); color: var(--tag-pdf); }
+.doc-type-icon.docx { background: var(--tag-doc-bg); color: var(--tag-doc); }
+.doc-type-icon.txt { background: var(--tag-txt-bg); color: var(--tag-txt); }
+.doc-type-icon.tavern { background: #fce7f3; color: #9d174d; }
+[data-theme="dark"] .doc-type-icon.tavern { background: #831843; color: #fbcfe8; }
+
+.doc-card-info {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.doc-card-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--md-sys-color-on-surface);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 6px;
+  line-height: 1.3;
+}
+
+.doc-card-badges {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+
+.badge-pill {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: var(--md-shape-full);
+  background: var(--md-sys-color-surface-container);
+  color: var(--md-sys-color-outline);
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.badge-pill.id-badge {
+  font-family: var(--font-mono);
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter 0.15s ease;
+}
+
+.badge-pill.id-badge:hover {
+  filter: brightness(0.92);
+}
+
+.doc-card-actions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: flex-end;
+  border-top: 1px solid var(--md-sys-color-surface-container);
+  padding-top: 12px;
+  flex-wrap: wrap;
+}
+
+/* Material 3 Expressive Buttons */
+.m3-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 16px;
+  border-radius: var(--md-shape-full);
+  border: none;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.m3-btn:active {
+  transform: scale(0.96);
+}
+
+.m3-btn-filled {
+  background: var(--md-sys-color-primary);
+  color: var(--md-sys-color-on-primary);
+  box-shadow: var(--md-elevation-1);
+}
+
+.m3-btn-filled:hover {
+  filter: brightness(0.92);
+  box-shadow: var(--md-elevation-2);
+}
+
+.m3-btn-tonal {
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+}
+
+.m3-btn-tonal:hover {
+  filter: brightness(0.95);
+}
+
+.m3-btn-outlined {
+  background: transparent;
+  border: 1px solid var(--md-sys-color-outline-variant);
+  color: var(--md-sys-color-on-surface);
+}
+
+.m3-btn-outlined:hover {
+  background: var(--md-sys-color-surface-container);
+  border-color: var(--md-sys-color-outline);
+}
+
+.m3-btn-danger {
+  background: var(--md-sys-color-error-container);
+  color: var(--md-sys-color-on-error-container);
+}
+
+.m3-btn-danger:hover {
+  filter: brightness(0.95);
+}
+
+.m3-btn-sm {
+  height: 30px;
+  padding: 0 12px;
+  font-size: 12px;
+}
+
+/* Form Styles for Session Binding */
+.form-group {
+  margin-bottom: 18px;
+  position: relative;
+}
+
+.form-label {
+  display: block;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--md-sys-color-on-surface);
+  margin-bottom: 8px;
+}
+
+.form-label .helper {
+  font-weight: 400;
+  color: var(--md-sys-color-outline);
+  margin-left: 6px;
+  font-size: 12px;
+}
+
+.m3-field {
+  width: 100%;
+  background: var(--md-sys-color-surface-container-low);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  border-radius: var(--md-shape-m);
+  padding: 10px 14px;
+  font-family: inherit;
+  font-size: 14px;
+  color: var(--md-sys-color-on-surface);
+  outline: none;
+  transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
+}
+
+.m3-field:focus {
+  border-color: var(--md-sys-color-primary);
+  background: var(--md-sys-color-surface-container-lowest);
+  box-shadow: 0 0 0 3px var(--md-sys-color-primary-container);
+}
+
+textarea.m3-field {
+  min-height: 160px;
+  resize: vertical;
+  line-height: 1.6;
+}
+
+.m3-switch-row.disabled {
+  opacity: 0.55;
+  pointer-events: none;
+  filter: grayscale(0.3);
+}
+
+/* Group Suggestion Dropdown (Android 16 Contact Card Style) */
+.suggest-dropdown {
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  background: var(--md-sys-color-surface-container-lowest);
+  border: 1px solid var(--md-sys-color-surface-container-high);
+  border-radius: var(--md-shape-xl);
+  box-shadow: var(--md-elevation-3);
+  max-height: 280px;
+  overflow-y: auto;
+  z-index: 50;
+  display: none !important;
+  pointer-events: none !important;
+  padding: 6px;
+}
+
+.suggest-dropdown.open {
+  display: block !important;
+  pointer-events: auto !important;
+  animation: fadeIn 0.18s cubic-bezier(0.2, 0, 0, 1);
+}
+
+.suggest-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-radius: var(--md-shape-l);
+  cursor: pointer;
+  transition: background 0.15s ease;
+  user-select: none;
+}
+
+.suggest-card:hover {
+  background: var(--md-sys-color-surface-container);
+}
+
+.suggest-avatar {
+  width: 38px;
+  height: 38px;
+  border-radius: var(--md-shape-full);
+  background: var(--md-sys-color-primary-container);
+  color: var(--md-sys-color-on-primary-container);
+  font-weight: 700;
+  font-size: 15px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 12px;
+  flex-shrink: 0;
+}
+
+.suggest-info strong {
+  display: block;
+  font-size: 14px;
+  color: var(--md-sys-color-on-surface);
+}
+
+.suggest-info span {
+  font-size: 12px;
+  color: var(--md-sys-color-outline);
+}
+
+/* Document Chips Selection for Binding */
+.doc-chips-grid {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 8px;
+}
+
+.doc-select-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: var(--md-shape-full);
+  background: var(--md-sys-color-surface-container);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  color: var(--md-sys-color-on-surface);
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  user-select: none;
+  transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
+}
+
+.doc-select-chip:hover {
+  background: var(--md-sys-color-surface-container-high);
+}
+
+.doc-select-chip.selected {
+  background: var(--md-sys-color-primary-container);
+  border-color: var(--md-sys-color-primary);
+  color: var(--md-sys-color-on-primary-container);
+  font-weight: 600;
+}
+
+/* Android 16 Switch Toggle Component */
+.m3-switch-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 16px;
+  background: var(--md-sys-color-surface-container-low);
+  border-radius: var(--md-shape-l);
+  margin-bottom: 16px;
+}
+
+.switch-label-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--md-sys-color-on-surface);
+}
+
+.switch-label-sub {
+  font-size: 12px;
+  color: var(--md-sys-color-outline);
+  margin-top: 2px;
+}
+
+.segmented-choice {
+  display: flex;
+  background: var(--md-sys-color-surface-container-high);
+  border-radius: var(--md-shape-full);
+  padding: 3px;
+}
+
+.segmented-choice-btn {
+  padding: 5px 12px;
+  border-radius: var(--md-shape-full);
+  border: none;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--md-sys-color-outline);
+  cursor: pointer;
+  transition: all 0.2s ease;
+  user-select: none;
+}
+
+.segmented-choice-btn.active {
+  background: var(--md-sys-color-surface-container-lowest);
+  color: var(--md-sys-color-primary);
+  box-shadow: var(--md-elevation-1);
+}
+
+/* Active Bindings List */
+.binding-cards-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.binding-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--md-sys-color-surface-container-lowest);
+  border: 1px solid var(--md-sys-color-surface-container-high);
+  border-radius: var(--md-shape-xl);
+  padding: 16px 20px;
+  transition: all 0.2s cubic-bezier(0.2, 0, 0, 1);
+}
+
+.binding-card:hover {
+  background: var(--md-sys-color-surface-container-low);
+  border-color: var(--md-sys-color-outline-variant);
+}
+
+.binding-card-meta {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+}
+
+.binding-card-key {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--md-sys-color-on-surface);
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.binding-group-name {
+  color: var(--md-sys-color-primary);
+  font-weight: 700;
+  font-size: 15px;
+}
+
+.binding-card-docs {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 4px;
+}
+
+.shield-filter-group {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.shield-filter-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: var(--md-shape-full);
+  background: var(--md-sys-color-surface-container);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  color: var(--md-sys-color-on-surface-variant);
+  transition: all 0.2s ease;
+  user-select: none;
+}
+
+.shield-filter-chip.active {
+  background: var(--md-sys-color-primary);
+  color: var(--md-sys-color-on-primary);
+  border-color: var(--md-sys-color-primary);
+  box-shadow: var(--md-elevation-1);
+}
+
+.mode-select-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.mode-btn-pill {
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 10px;
+  border-radius: var(--md-shape-full);
+  background: var(--md-sys-color-surface-container);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  color: var(--md-sys-color-on-surface-variant);
+  cursor: pointer;
+  transition: all 0.18s ease;
+  user-select: none;
+}
+
+.mode-btn-pill:hover {
+  background: var(--md-sys-color-surface-container-high);
+}
+
+.mode-btn-pill.active {
+  background: var(--md-sys-color-primary);
+  color: var(--md-sys-color-on-primary);
+  border-color: var(--md-sys-color-primary);
+  box-shadow: var(--md-elevation-1);
+}
+
+.binding-card-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.badge-pill.shield-badge-on {
+  background: #fef08a !important;
+  color: #854d0e !important;
+  font-weight: 700 !important;
+  border: 1px solid #facc15;
+}
+
+[data-theme="dark"] .badge-pill.shield-badge-on {
+  background: #713f12 !important;
+  color: #fef08a !important;
+  border-color: #a16207;
+}
+
+.badge-pill.shield-badge-off {
+  background: var(--md-sys-color-surface-container-high) !important;
+  color: var(--md-sys-color-outline) !important;
+}
+
+.badge-pill.mode-badge-system {
+  background: #fbcfe8 !important;
+  color: #9d174d !important;
+  font-weight: 700 !important;
+  border: 1px solid #f472b6;
+}
+
+[data-theme="dark"] .badge-pill.mode-badge-system {
+  background: #831843 !important;
+  color: #fbcfe8 !important;
+  border-color: #be185d;
+}
+
+.badge-pill.mode-badge-workspace {
+  background: #cffafe !important;
+  color: #0e7490 !important;
+  font-weight: 700 !important;
+  border: 1px solid #67e8f9;
+}
+
+[data-theme="dark"] .badge-pill.mode-badge-workspace {
+  background: #164e63 !important;
+  color: #cffafe !important;
+  border-color: #0891b2;
+}
+
+.badge-pill.mode-badge-ref {
+  background: var(--md-sys-color-surface-container-high) !important;
+  color: var(--md-sys-color-on-surface-variant) !important;
+}
+
+.doc-tag {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: var(--md-shape-full);
+  background: var(--md-sys-color-secondary-container);
+  color: var(--md-sys-color-on-secondary-container);
+  font-weight: 500;
+}
+
+/* Android 16 Adaptive Modal Dialog (Desktop: Centered Floating Dialog; Mobile: Bottom Sheet) */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(8px);
+  display: none !important;
+  pointer-events: none !important;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  opacity: 0;
+  padding: 24px;
+  transition: opacity 0.2s cubic-bezier(0.2, 0, 0, 1);
+}
+
+.modal-overlay.open {
+  display: flex !important;
+  pointer-events: auto !important;
+  opacity: 1;
+}
+
+.bottom-sheet {
+  background: var(--md-sys-color-surface-container-lowest);
+  border-radius: var(--md-shape-xxl);
+  width: 100%;
+  max-width: 820px;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: var(--md-elevation-4);
+  transform: scale(0.96);
+  transition: transform 0.25s cubic-bezier(0.2, 0, 0, 1);
+  border: 1px solid var(--md-sys-color-surface-container-high);
+}
+
+.modal-overlay.open .bottom-sheet {
+  transform: scale(1);
+}
+
+.bottom-sheet-handle-bar {
+  width: 44px;
+  height: 5px;
+  background: var(--md-sys-color-outline-variant);
+  border-radius: var(--md-shape-full);
+  margin: 12px auto 6px auto;
+}
+
+.bottom-sheet-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 24px 16px 24px;
+  border-bottom: 1px solid var(--md-sys-color-surface-container-high);
+}
+
+.bottom-sheet-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--md-sys-color-on-surface);
+}
+
+.bottom-sheet-body {
+  padding: 20px 24px;
+  overflow-y: auto;
+  font-size: 14px;
+  line-height: 1.7;
+}
+
+.chunk-text-box {
+  background: var(--md-sys-color-surface-container-low);
+  border: 1px solid var(--md-sys-color-surface-container-high);
+  border-radius: var(--md-shape-l);
+  padding: 18px;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--md-sys-color-on-surface);
+}
+
+.bottom-sheet-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 24px;
+  border-top: 1px solid var(--md-sys-color-surface-container-high);
+  background: var(--md-sys-color-surface-container-lowest);
+}
+
+/* Floating Snackbar (Android 16 Pill Toast) */
+.m3-snackbar {
+  position: fixed;
+  bottom: 24px;
+  left: 50%;
+  transform: translateX(-50%) translateY(100px);
+  background: var(--md-sys-color-on-surface);
+  color: var(--md-sys-color-surface);
+  padding: 12px 22px;
+  border-radius: var(--md-shape-full);
+  font-size: 14px;
+  font-weight: 500;
+  box-shadow: var(--md-elevation-3);
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  z-index: 200;
+  opacity: 0;
+  pointer-events: none !important;
+  transition: all 0.28s cubic-bezier(0.2, 0, 0, 1);
+  max-width: 90vw;
+}
+
+.m3-snackbar.show {
+  transform: translateX(-50%) translateY(0);
+  opacity: 1;
+  pointer-events: auto !important;
+}
+
+/* Empty State */
+.empty-state {
+  text-align: center;
+  padding: 48px 16px;
+  color: var(--md-sys-color-outline);
+}
+
+.empty-state-icon {
+  font-size: 48px;
+  margin-bottom: 12px;
+  opacity: 0.6;
+}
+
+.empty-state h3 {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--md-sys-color-on-surface);
+  margin-bottom: 6px;
+}
+
+/* Responsive adjustments for Tablets & Mobile */
+@media (max-width: 680px) {
+  .app-container {
+    padding: 10px 12px;
+  }
+  .top-bar {
+    padding: 8px 0 16px 0;
+  }
+  .app-icon-badge {
+    width: 40px;
+    height: 40px;
+    font-size: 20px;
+  }
+  .top-bar-text h1 {
+    font-size: 19px;
+  }
+  .top-bar-text p {
+    font-size: 12px;
+  }
+  .hero-widget-row {
+    grid-template-columns: 1fr;
+    gap: 8px;
+    margin-bottom: 16px;
+  }
+  .hero-widget {
+    padding: 12px 14px;
+  }
+  .hero-widget .widget-val {
+    font-size: 22px;
+  }
+  .segmented-nav {
+    padding: 3px;
+    margin-bottom: 16px;
+    top: 6px;
+  }
+  .nav-tab {
+    padding: 8px 10px;
+    font-size: 13px;
+    gap: 4px;
+  }
+  .m3-card {
+    padding: 16px 12px;
+    border-radius: var(--md-shape-l);
+    margin-bottom: 14px;
+  }
+  .dropzone-container {
+    padding: 24px 12px;
+    border-radius: var(--md-shape-l);
+  }
+  .doc-grid {
+    grid-template-columns: 1fr;
+    gap: 10px;
+  }
+  .doc-card {
+    padding: 14px 12px;
+    border-radius: var(--md-shape-l);
+  }
+  .doc-card-actions {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    gap: 6px;
+  }
+  .doc-card-actions .m3-btn {
+    flex: 1 1 calc(50% - 6px);
+    height: 34px;
+  }
+  .binding-card {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+    padding: 14px 12px;
+  }
+  .binding-card > div:last-child {
+    display: flex;
+    width: 100%;
+    gap: 8px;
+  }
+  .binding-card > div:last-child .m3-btn {
+    flex: 1;
+    height: 34px;
+  }
+  .m3-switch-row {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+  .segmented-choice {
+    width: 100%;
+  }
+  .segmented-choice-btn {
+    flex: 1;
+    text-align: center;
+  }
+  .modal-overlay {
+    align-items: flex-end;
+    padding: 0;
+  }
+  .bottom-sheet {
+    max-height: 90vh;
+    border-radius: 20px 20px 0 0;
+    transform: translateY(100%);
+    transition: transform 0.28s cubic-bezier(0.2, 0, 0, 1);
+  }
+  .modal-overlay.open .bottom-sheet {
+    transform: translateY(0);
+  }
+  .bottom-sheet-header, .bottom-sheet-footer {
+    padding: 12px 14px;
+  }
+  .bottom-sheet-body {
+    padding: 14px 12px;
+  }
+  .bottom-sheet-footer {
+    flex-direction: column;
+    gap: 10px;
+  }
+  .bottom-sheet-footer > div {
+    width: 100%;
+    justify-content: space-between;
+  }
+  .bottom-sheet-footer .m3-btn {
+    flex: 1;
+  }
+}
