@@ -1561,6 +1561,7 @@ class DocMemoryPlugin(Star):
                 "docs": [{"doc_id": d, "filename": self._index.get(d, {}).get("filename", d)} for d in ids],
                 "prompt": ent.get("prompt", ""),
                 "shield": bool(ent.get("shield", False)),
+                "force_system_prompt": bool(ent.get("force_system_prompt", False)),
                 "mode": str(ent.get("mode") or "reference"),
             }
         return json_response({"bindings": enriched, "docs": self.list_documents()})
@@ -1587,6 +1588,8 @@ class DocMemoryPlugin(Star):
         if "shield" in payload:
             sh = payload.get("shield")
             ent["shield"] = bool(sh) if sh is not None else False
+        if "force_system_prompt" in payload:
+            ent["force_system_prompt"] = bool(payload.get("force_system_prompt"))
         if "mode" in payload:
             m = str(payload.get("mode") or "reference").lower()
             if m in ("system", "sys", "强制", "提示词", "1"):
@@ -1601,6 +1604,7 @@ class DocMemoryPlugin(Star):
             "ok": True, "session_key": key, "doc_ids": valid,
             "prompt": ent.get("prompt", ""),
             "shield": ent.get("shield", False),
+            "force_system_prompt": ent.get("force_system_prompt", False),
             "mode": ent.get("mode", "reference"),
         })
 

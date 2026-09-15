@@ -964,6 +964,7 @@
             </div>
             <div class="binding-card-docs">
               ${docs.length ? docs.map((d) => `<span class="doc-tag">${esc(d.filename || d.doc_id || d)}</span>`).join("") : '<span class="helper">无绑定文档</span>'}
+              ${raw.force_system_prompt ? '<span class="badge-pill" style="background:#fee2e2; color:#991b1b; font-weight:700; border:1px solid #f87171;">⚡ 强制唯一系统词</span>' : ''}
               <span class="badge-pill ${shieldClass}">${esc(shieldTag)}</span>
               ${prompt ? '<span class="badge-pill" style="background:var(--md-sys-color-tertiary-container); color:var(--md-sys-color-on-tertiary-container);">🏷️ 专属提示词</span>' : ''}
             </div>
