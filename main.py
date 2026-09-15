@@ -624,6 +624,13 @@ class DocMemoryPlugin(Star):
 
     def set_session_mode(self, session_key: str, mode: str) -> Dict[str, Any]:
         ent = self._get_entry(session_key)
+        # 若当前没有任何绑定文档，禁止切换文档生效模式
+        doc_ids = [d for d in ent.get("doc_ids", []) if d in self._index]
+        if not doc_ids:
+            ent["mode"] = "reference"
+            self._save_json(self.bindings_path, self._bindings)
+            return ent
+
         m = str(mode or "").lower()
         if m in ("system", "sys", "强制", "提示词", "1"):
             ent["mode"] = "system"
@@ -1309,9 +1316,18 @@ class DocMemoryPlugin(Star):
 
     async def doc_mode(self, event: AstrMessageEvent, mode: str = ""):
         """设置本群文档生效模式 /doc mode workspace|system|reference（管理员）"""
-        raw = (mode or re.sub(r"^/doc\s+mode\s*", "", event.message_str or "")).strip().lower()
         key = self._canonical_key(event)
         ent = self._get_entry(key)
+        doc_ids = [d for d in ent.get("doc_ids", []) if d in self._index]
+        if not doc_ids:
+            yield event.plain_result(
+                f"⚠️ 本群（{key}）当前未绑定任何文档。\n\n"
+                "文档生效模式（强制遵守 / 工作区 / 仅作参考）仅在挂载文档后生效。\n"
+                "💡 请先使用 /doc bind <ID> 绑定文档，或直接配置专属提示词。"
+            )
+            return
+
+        raw = (mode or re.sub(r"^/doc\s+mode\s*", "", event.message_str or "")).strip().lower()
         if raw in ("workspace", "ws", "工作区", "沙箱", "3"):
             self.set_session_mode(key, "workspace")
             yield event.plain_result(

@@ -976,9 +976,13 @@
             </div>
             <div class="mode-select-row">
               <span style="font-size:12px; font-weight:600; color:var(--md-sys-color-outline); margin-right:4px;">生效模式:</span>
-              <button class="mode-btn-pill ${curMode === 'reference' ? 'active' : ''}" data-act="set-mode" data-mode="reference" data-key="${esc(k)}" type="button">📖 仅作参考</button>
-              <button class="mode-btn-pill ${curMode === 'system' ? 'active' : ''}" data-act="set-mode" data-mode="system" data-key="${esc(k)}" type="button">⚡ 强制系统词</button>
-              <button class="mode-btn-pill ${curMode === 'workspace' ? 'active' : ''}" data-act="set-mode" data-mode="workspace" data-key="${esc(k)}" type="button">💻 工作区Agent</button>
+              ${docs.length ? `
+                <button class="mode-btn-pill ${curMode === 'reference' ? 'active' : ''}" data-act="set-mode" data-mode="reference" data-key="${esc(k)}" type="button">📖 仅作参考</button>
+                <button class="mode-btn-pill ${curMode === 'system' ? 'active' : ''}" data-act="set-mode" data-mode="system" data-key="${esc(k)}" type="button">⚡ 强制系统词</button>
+                <button class="mode-btn-pill ${curMode === 'workspace' ? 'active' : ''}" data-act="set-mode" data-mode="workspace" data-key="${esc(k)}" type="button">💻 工作区Agent</button>
+              ` : `
+                <span class="helper" style="font-size:12px;">（未绑定文档，模式已禁用。仅专属系统词生效）</span>
+              `}
             </div>
           </div>
           <div class="binding-card-actions">
@@ -1074,9 +1078,16 @@
             session_key: key,
             doc_ids: [],
             prompt: cur.prompt || "",
-            shield: cur.shield,
-            mode: cur.mode || "reference",
+            shield: Boolean(cur.shield),
+            force_system_prompt: Boolean(cur.force_system_prompt),
+            mode: "reference",
           });
+          // 如果当前输入框恰好载入了该群，同步清空表单已勾选文档并禁用模式
+          const curInputKey = ($("sessionKey")?.value || "").trim();
+          if (curInputKey === key) {
+            selectedDocIds.clear();
+            renderDocChips();
+          }
           showToast(`✅ 已成功解除 ${key} 的全部文档绑定`);
           await loadBindings();
         } catch (err) {

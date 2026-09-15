@@ -4,7 +4,7 @@
 
 - **作者**：Light
 - **开源仓库**：https://github.com/imsuperone/astrbot_plugin_doc_memory
-- **当前版本**：1.0.4
+- **当前版本**：1.0.5
 - **AstrBot 版本要求**：>=4.16
 
 ## 核心特性
