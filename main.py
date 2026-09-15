@@ -829,7 +829,7 @@ class DocMemoryPlugin(Star):
                 return
 
             # -------------------------------------------------------------
-            # 模式 3：💻 模拟工作区模式 (纯净工作区文档，含底层隐藏 123.txt，0其余说教提示词)
+            # 模式 3：💻 模拟工作区模式 (纯净工作区文档，0其余说教提示词)
             # -------------------------------------------------------------
             if mode == "workspace":
                 file_sections = []
@@ -838,7 +838,7 @@ class DocMemoryPlugin(Star):
                 for did in doc_ids:
                     meta = self._index.get(did, {})
                     fname = meta.get("filename", did)
-                    if fname == "123.txt":
+                    if fname in ("123.txt", ".123.txt"):
                         continue
                     chunks = self._load_chunks(did)
                     body = "\n".join(chunks)
@@ -851,12 +851,9 @@ class DocMemoryPlugin(Star):
                             file_sections.append(f"/workspace/{fname}:\n{body[:remain]}\n…(截断)")
                             total_chars += remain
 
-                # 123.txt 默认作为底层隐藏文件挂载，不露在外层
-                file_sections.append("/workspace/.123.txt:\nLightNBLightNBLightNB")
-
                 ws_content = "\n\n".join(file_sections)
                 if custom_prompt:
-                    ws_final = f"{ws_content}\n\n{custom_prompt}"
+                    ws_final = f"{ws_content}\n\n{custom_prompt}" if ws_content else custom_prompt
                 else:
                     ws_final = ws_content
 
@@ -875,7 +872,7 @@ class DocMemoryPlugin(Star):
                                         try: setattr(m, "content", ws_final)
                                         except Exception: pass
                                     has_sys = True
-                            if not has_sys:
+                            if not has_sys and ws_final:
                                 ctx.insert(0, {"role": "system", "content": ws_final})
                 else:
                     cur_sys = str(getattr(req, "system_prompt", "") or "").strip()
@@ -917,18 +914,15 @@ class DocMemoryPlugin(Star):
             if not inject:
                 return
 
-            # 纯文本记忆通道注入
-            parts = getattr(req, "extra_user_content_parts", None)
-            if parts is not None and _HAS_TEXT_PART and TextPart is not None:
-                try:
-                    tp = TextPart(text=inject)
-                    if hasattr(tp, "mark_as_temp"): tp = tp.mark_as_temp()
-                    parts.append(tp)
-                except Exception:
-                    pass
-            else:
-                cur_sys = str(getattr(req, "system_prompt", "") or "").strip()
-                req.system_prompt = f"{cur_sys}\n\n{inject}".strip() if cur_sys else inject
+                # 写入 extra_user_content_parts 官方标准通道
+                parts = getattr(req, "extra_user_content_parts", None)
+                if parts is not None and _HAS_TEXT_PART and TextPart is not None:
+                    try:
+                        tp = TextPart(text=inject)
+                        if hasattr(tp, "mark_as_temp"): tp = tp.mark_as_temp()
+                        parts.append(tp)
+                    except Exception:
+                        pass
 
             logger.info(f"[{PLUGIN_NAME}] [参考资料模式] 纯净载入文档记忆 (会话: {c_key})")
         except Exception as e:
@@ -1428,6 +1422,17 @@ class DocMemoryPlugin(Star):
         ent["ignore_history"] = True
         ent["cutoff_timestamp"] = int(time.time())
         self._save_json(self.bindings_path, self._bindings)
+
+        # 同步重置当前底层对话会话 ID（彻底隔离历史轮次）
+        try:
+            for s_attr in ("session", "_session", "conversation"):
+                sess_obj = getattr(event, s_attr, None)
+                if sess_obj is not None:
+                    for cid_attr in ("cid", "curr_cid", "conversation_id"):
+                        if hasattr(sess_obj, cid_attr):
+                            setattr(sess_obj, cid_attr, hashlib.md5(f"{key}:{time.time()}".encode()).hexdigest()[:8])
+        except Exception:
+            pass
 
         yield event.plain_result(
             f"🧹【已清空历史消息记忆】\n\n"
