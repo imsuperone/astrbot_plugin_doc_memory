@@ -740,33 +740,13 @@ class DocMemoryPlugin(Star):
                         h_val.clear()
 
             # -------------------------------------------------------------
-            # 特殊开关：强制注入系统提示词 (清空其他提示词，强制专属提示词为唯一系统提示词)
+            # 第一优先级通道：只有系统提示词模式 (无文档，或已开启 force_system_prompt)
             # -------------------------------------------------------------
-            if force_sys and custom_prompt:
-                req.system_prompt = custom_prompt
-                for attr in ("contexts", "messages"):
-                    ctx = getattr(req, attr, None)
-                    if isinstance(ctx, list):
-                        has_sys = False
-                        for m in ctx:
-                            r = m.get("role") if isinstance(m, dict) else getattr(m, "role", "")
-                            if r == "system":
-                                if isinstance(m, dict): m["content"] = custom_prompt
-                                else:
-                                    try: setattr(m, "content", custom_prompt)
-                                    except Exception: pass
-                                has_sys = True
-                        if not has_sys:
-                            ctx.insert(0, {"role": "system", "content": custom_prompt})
-
-                if not has_bound:
-                    logger.info(f"[{PLUGIN_NAME}] [强制系统词模式] 已清空其他提示词，专属提示词单独生效 (会话: {c_key})")
-                    return
-
-            # 无绑定文档时的独立配置响应 (支持单独设置专属提示词与屏蔽人格)
-            if not has_bound:
-                if shield:
-                    req.system_prompt = custom_prompt if custom_prompt else ""
+            if (not has_bound and custom_prompt) or (force_sys and custom_prompt):
+                target_prompt = custom_prompt
+                if shield or force_sys:
+                    # 彻底清空抹除自带人格，专属提示词直接作为底层唯一系统词
+                    req.system_prompt = target_prompt
                     for attr in ("contexts", "messages"):
                         ctx = getattr(req, attr, None)
                         if isinstance(ctx, list):
@@ -774,16 +754,36 @@ class DocMemoryPlugin(Star):
                             for m in ctx:
                                 r = m.get("role") if isinstance(m, dict) else getattr(m, "role", "")
                                 if r == "system":
-                                    if isinstance(m, dict): m["content"] = req.system_prompt
+                                    if isinstance(m, dict): m["content"] = target_prompt
                                     else:
-                                        try: setattr(m, "content", req.system_prompt)
+                                        try: setattr(m, "content", target_prompt)
                                         except Exception: pass
                                     has_sys = True
-                            if not has_sys and req.system_prompt:
-                                ctx.insert(0, {"role": "system", "content": req.system_prompt})
-                elif custom_prompt:
+                            if not has_sys:
+                                ctx.insert(0, {"role": "system", "content": target_prompt})
+                else:
+                    # 保留原人格，追加专属提示词
                     cur = str(getattr(req, "system_prompt", "") or "").strip()
-                    req.system_prompt = f"{cur}\n\n{custom_prompt}".strip() if cur else custom_prompt
+                    req.system_prompt = f"{cur}\n\n{target_prompt}".strip() if cur else target_prompt
+
+                if not has_bound:
+                    logger.info(f"[{PLUGIN_NAME}] [专属系统词模式] 无文档，专属系统提示词独立生效 (会话: {c_key})")
+                    return
+
+            # 无文档且无提示词时的空载响应
+            if not has_bound:
+                if shield:
+                    req.system_prompt = ""
+                    for attr in ("contexts", "messages"):
+                        ctx = getattr(req, attr, None)
+                        if isinstance(ctx, list):
+                            for m in ctx:
+                                r = m.get("role") if isinstance(m, dict) else getattr(m, "role", "")
+                                if r == "system":
+                                    if isinstance(m, dict): m["content"] = ""
+                                    else:
+                                        try: setattr(m, "content", "")
+                                        except Exception: pass
                 return
 
             # -------------------------------------------------------------
@@ -1095,8 +1095,10 @@ class DocMemoryPlugin(Star):
         curr_key = keys[0] if keys else "(未知)"
         shield_txt = "🛡️ 开启（已清空原人格）" if sess.get("shield") else "👤 关闭（保留原人格）"
         mode_txt = "💻 模拟工作区（仅限工作区文档）" if sess.get("mode") == "workspace" else ("⚡ 强制遵守（系统提示词模式）" if sess.get("mode") == "system" else "📖 仅作参考资料（按需检索）")
-        prompt_txt = f"已设置（{len(sess['prompt'])}字）" if sess.get("prompt") else "未设置"
-        force_txt = "⚡ 开启（清空其他提示词，专属提示词唯一生效）" if sess.get("force_system_prompt") else "关闭"
+        has_prompt = bool(sess.get("prompt"))
+        prompt_txt = f"已设置（{len(sess['prompt'])}字）" if has_prompt else "未设置"
+        force_sys = bool(sess.get("force_system_prompt"))
+        force_txt = "⚡ 开启（清空其他提示词，专属提示词唯一生效）" if force_sys else "关闭"
 
         lines = [
             "📌 本群文档记忆状态\n",
@@ -1107,8 +1109,13 @@ class DocMemoryPlugin(Star):
             f"• 专属提示词：{prompt_txt}\n",
         ]
         if not ids:
-            lines.append("⚠️ 本群当前未绑定任何文档。")
-            lines.append("💡 发送 /doc list 查看可用文档，或发送 /doc bind <ID> 快速绑定。")
+            if has_prompt:
+                lines.append("💡 当前未绑定文档，专属系统提示词正常独立生效中。")
+                if force_sys:
+                    lines.append("⚡ 强制注入模式已激活：已清空其他提示词，专属提示词作为底层唯一系统词。")
+            else:
+                lines.append("⚠️ 本群当前未绑定任何文档。")
+                lines.append("💡 发送 /doc list 查看可用文档，或发送 /doc bind <ID> 快速绑定。")
         else:
             lines.append(f"📖 已绑定文档（共 {len(ids)} 篇）：")
             for idx, d in enumerate(ids, 1):

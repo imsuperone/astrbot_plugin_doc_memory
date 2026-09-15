@@ -582,10 +582,12 @@
     if (modeRow) {
       if (hasDocs) {
         modeRow.classList.remove("disabled");
+        modeRow.querySelectorAll("button").forEach((b) => b.disabled = false);
         if (modeSub) modeSub.textContent = "设置文档在会话中的角色定位与隔离级别";
       } else {
         modeRow.classList.add("disabled");
-        if (modeSub) modeSub.textContent = "（当前未选择文档，仅生效专属系统提示词与屏蔽）";
+        modeRow.querySelectorAll("button").forEach((b) => b.disabled = true);
+        if (modeSub) modeSub.textContent = "（当前未选择文档，文档模式已锁定。您仍可配置专属系统提示词、强制注入与屏蔽人格）";
       }
     }
   }
@@ -774,6 +776,10 @@
   }
 
   function setDocMode(val) {
+    if (selectedDocIds.size === 0) {
+      showToast("💡 当前未选择文档，文档生效模式暂不可选。您可直接配置专属提示词与屏蔽开关。");
+      return;
+    }
     if (val === "system" || val === "workspace") {
       currentDocMode = val;
     } else {
