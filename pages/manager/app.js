@@ -2,7 +2,7 @@
 (function () {
   "use strict";
 
-  const PLUGIN_ID = "astrbot_plugin_doc_memory";
+  const PLUGIN_ID = "xbdoc";
 
   // ---- Safe Bridge & API Layer ----
   function getBridge() {
@@ -530,8 +530,8 @@
 
     async function handleUpload(file) {
       if (!file) return;
-      if (file.size > 20 * 1024 * 1024) {
-        showToast("文件超出 20MB 上限，请拆分后上传");
+      if (file.size > 50 * 1024 * 1024) {
+        showToast("文件超出 50MB 上限，请拆分后上传");
         return;
       }
       if (progress) progress.style.display = "block";
@@ -580,15 +580,11 @@
     const modeRow = $("docModeRow");
     const modeSub = $("docModeSub");
     if (modeRow) {
-      if (hasDocs) {
-        modeRow.classList.remove("disabled");
-        modeRow.querySelectorAll("button").forEach((b) => b.disabled = false);
-        if (modeSub) modeSub.textContent = "设置文档在会话中的角色定位与隔离级别";
-      } else {
-        modeRow.classList.add("disabled");
-        modeRow.querySelectorAll("button").forEach((b) => b.disabled = true);
-        if (modeSub) modeSub.textContent = "（当前未选择文档，文档模式已锁定。您仍可配置专属系统提示词、强制注入与屏蔽人格）";
-      }
+      modeRow.classList.remove("disabled");
+      modeRow.querySelectorAll("button").forEach((b) => b.disabled = false);
+      if (modeSub) modeSub.textContent = hasDocs
+        ? "设置文档在会话中的角色定位与隔离级别"
+        : "当前未选择文档也可预设模式，绑定文档后自动生效";
     }
   }
 
@@ -776,10 +772,6 @@
   }
 
   function setDocMode(val) {
-    if (selectedDocIds.size === 0) {
-      showToast("💡 当前未选择文档，文档生效模式暂不可选。您可直接配置专属提示词与屏蔽开关。");
-      return;
-    }
     if (val === "system" || val === "workspace") {
       currentDocMode = val;
     } else {
@@ -1052,6 +1044,7 @@
             doc_ids: (cur.docs || []).map((d) => (typeof d === "string" ? d : d.doc_id)),
             prompt: cur.prompt || "",
             shield: Boolean(cur.shield),
+            force_system_prompt: Boolean(cur.force_system_prompt),
             mode: targetMode,
           });
           showToast(modeLabels[targetMode] || "模式已更新");

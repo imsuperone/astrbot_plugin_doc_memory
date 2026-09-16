@@ -13,19 +13,12 @@ from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star
 
-try:
-    import astrbot.api.message_components as Comp
-    _HAS_COMP = True
-except Exception:
-    _HAS_COMP = False
-    Comp = None  # type: ignore
-
-PLUGIN_NAME = "astrbot_plugin_doc_memory"
+PLUGIN_NAME = "xbdoc"
+OLD_PLUGIN_NAME = "astrbot_plugin_doc_memory"
 
 # 可选 Web API 依赖
 try:
     from astrbot.api.web import (
-        PluginUploadFile,
         error_response,
         file_response,
         json_response,
@@ -34,7 +27,6 @@ try:
     _HAS_WEB_API = True
 except Exception:
     _HAS_WEB_API = False
-    PluginUploadFile = object  # type: ignore
 
 try:
     from astrbot.core.utils.astrbot_path import get_astrbot_data_path
@@ -176,13 +168,19 @@ def score_chunk(query_tokens: List[str], chunk_tokens: List[str]) -> float:
     """TF 加权与覆盖率综合计分。"""
     if not query_tokens or not chunk_tokens:
         return 0.0
-    tf = Counter(chunk_tokens)
+    return score_chunk_tf(query_tokens, Counter(chunk_tokens))
+
+
+def score_chunk_tf(query_tokens: List[str], tf: Counter) -> float:
+    """基于预计算词频计分，避免每次检索重复分词（性能优化）。"""
+    if not query_tokens or not tf:
+        return 0.0
     score = 0.0
     unique_q = set(query_tokens)
     for t in unique_q:
         c = tf.get(t, 0)
         if c > 0:
-            w = 0.5 if len(t) == 1 and "\u4e00" <= t <= "\u9fff" else 1.0
+            w = 0.5 if len(t) == 1 and "一" <= t <= "鿿" else 1.0
             score += w * (1.0 + 0.3 * (min(c, 5) - 1))
     hits = sum(1 for t in unique_q if tf.get(t, 0) > 0)
     score *= 1.0 + 0.2 * (hits / max(1, len(unique_q)))
@@ -238,7 +236,7 @@ def extract_text_from_bytes(suffix: str, data: bytes) -> str:
 # 插件主体
 # ======================================================================
 
-class DocMemoryPlugin(Star):
+class XbdocPlugin(Star):
     def __init__(self, context: Context, config: Optional[Dict[str, Any]] = None):
         super().__init__(context)
         if config is not None:
@@ -254,11 +252,6 @@ class DocMemoryPlugin(Star):
         self.max_inject_chars = int(cfg.get("max_inject_chars", 6000) or 6000)
         self.auto_inject = bool(cfg.get("auto_inject", True))
         self.allow_private_bind = bool(cfg.get("allow_private_bind", True))
-
-        self._default_custom_enabled = bool(cfg.get("custom_prompt_enabled", True))
-        self._default_custom_prompt = str(cfg.get("custom_prompt", "") or "")
-        self._default_shield = bool(cfg.get("shield_persona", False))
-        self._default_only_bound = bool(cfg.get("only_when_bound", True))
 
         # 持久化存储路径
         self._latest_bot = None
@@ -276,6 +269,8 @@ class DocMemoryPlugin(Star):
             self._load_json(self.bindings_path, {})
         )
         self._chunk_cache: Dict[str, List[str]] = {}  # 内存缓存：doc_id -> chunks
+        self._chunk_tokens_cache: Dict[str, List[Counter]] = {}  # 性能优化：doc_id -> 每切片词频
+        self._seen_save_ts = 0  # 群记录节流时间戳（仅内存，不落盘）
 
         if _HAS_WEB_API:
             try:
@@ -285,9 +280,22 @@ class DocMemoryPlugin(Star):
 
     # ---------- 路径与持久化 ----------
     def _resolve_data_dir(self) -> Path:
+        # 新插件名优先；若旧目录存在则自动迁移，保证改名不丢数据
+        candidates: List[Path] = []
         if _HAS_DATA_PATH:
             try:
-                return Path(get_astrbot_data_path()) / "plugin_data" / PLUGIN_NAME
+                base = Path(get_astrbot_data_path()) / "plugin_data"
+                new_p = base / PLUGIN_NAME
+                old_p = base / OLD_PLUGIN_NAME
+                if not new_p.exists() and old_p.exists():
+                    try:
+                        import shutil
+                        shutil.copytree(old_p, new_p)
+                        logger.info(f"[{PLUGIN_NAME}] 已从旧数据目录迁移: {old_p} -> {new_p}")
+                    except Exception as e:
+                        logger.warning(f"[{PLUGIN_NAME}] 数据迁移失败，将直接使用旧目录: {e}")
+                        return old_p
+                return new_p
             except Exception:
                 pass
         for cand in [
@@ -355,8 +363,8 @@ class DocMemoryPlugin(Star):
             if platform and not ent.get("platform"):
                 ent["platform"] = platform
 
-            if ent["msg_count"] % 25 == 0 or (now - int(ent.get("_last_save", 0))) > 45:
-                ent["_last_save"] = now
+            if ent["msg_count"] % 25 == 0 or (now - self._seen_save_ts) > 45:
+                self._seen_save_ts = now
                 self._save_seen()
         except Exception:
             pass
@@ -399,7 +407,8 @@ class DocMemoryPlugin(Star):
         if len(text) < 2:
             raise RuntimeError("提取纯文本内容过少，拒绝入库")
 
-        doc_id = hashlib.md5(f"{filename}:{len(data)}:{text[:500]}".encode("utf-8")).hexdigest()[:10]
+        text_hash = hashlib.md5(text.encode("utf-8")).hexdigest()
+        doc_id = hashlib.md5(f"{filename}:{len(data)}:{text_hash}".encode("utf-8")).hexdigest()[:10]
         stored_name = f"{doc_id}_{filename}"
         (self.docs_dir / stored_name).write_bytes(data)
 
@@ -421,6 +430,7 @@ class DocMemoryPlugin(Star):
             json.dumps(chunks, ensure_ascii=False), encoding="utf-8"
         )
         self._chunk_cache[doc_id] = chunks  # 更新内存缓存
+        self._chunk_tokens_cache.pop(doc_id, None)  # 词频缓存失效，下次检索重建
         self._save_json(self.index_path, self._index)
         logger.info(f"[{PLUGIN_NAME}] 入库文档 {filename} id={doc_id} chunks={len(chunks)} tavern={is_tavern}")
         return meta
@@ -431,10 +441,12 @@ class DocMemoryPlugin(Star):
             return False
         for p in [self.docs_dir / str(meta.get("stored_name", "")), self.data_dir / f"chunks_{doc_id}.json"]:
             try:
-                p.unlink(missing_ok=True)
+                if p.exists():
+                    p.unlink()
             except Exception:
                 pass
         self._chunk_cache.pop(doc_id, None)  # 清除内存缓存
+        self._chunk_tokens_cache.pop(doc_id, None)
 
         # 同步清理所有绑定引用
         changed = False
@@ -461,7 +473,7 @@ class DocMemoryPlugin(Star):
                 data = json.loads(cache.read_text(encoding="utf-8"))
                 if isinstance(data, list) and data:
                     result = [str(x) for x in data]
-                    self._chunk_cache[doc_id] = result
+                    self._remember_chunks(doc_id, result)
                     return result
         except Exception:
             pass
@@ -478,11 +490,32 @@ class DocMemoryPlugin(Star):
                 text = extract_text_from_bytes(str(meta.get("suffix", "")), raw)
             chunks = chunk_text(text, self.chunk_size, self.chunk_overlap)
             cache.write_text(json.dumps(chunks, ensure_ascii=False), encoding="utf-8")
-            self._chunk_cache[doc_id] = chunks
+            self._remember_chunks(doc_id, chunks)
             return chunks
         except Exception as e:
             logger.error(f"[{PLUGIN_NAME}] 重建切片失败 {doc_id}: {e}")
             return []
+
+    def _remember_chunks(self, doc_id: str, chunks: List[str]) -> None:
+        """缓存切片并做简单上限保护，防止文档过多时内存无限增长。"""
+        if len(self._chunk_cache) > 200:
+            try:
+                oldest = next(iter(self._chunk_cache))
+                self._chunk_cache.pop(oldest, None)
+                self._chunk_tokens_cache.pop(oldest, None)
+            except Exception:
+                pass
+        self._chunk_cache[doc_id] = chunks
+
+    def _get_chunk_counters(self, doc_id: str) -> List[Counter]:
+        """获取每切片词频（缓存），避免每次提问重复分词全量切片。"""
+        cached = self._chunk_tokens_cache.get(doc_id)
+        if cached is not None:
+            return cached
+        chunks = self._load_chunks(doc_id)
+        counters = [Counter(tokenize(ch)) for ch in chunks]
+        self._chunk_tokens_cache[doc_id] = counters
+        return counters
 
     # ---------- 会话与绑定管理 ----------
     @staticmethod
@@ -490,16 +523,26 @@ class DocMemoryPlugin(Star):
         s = str(k or "").strip()
         if not s:
             return ""
-        if s.startswith("group:"):
-            return s
+        # 兼容 group:group:123 这类双重前缀脏数据
+        while s.lower().startswith("group:group:"):
+            s = s[6:]
+        if s.lower().startswith("group:"):
+            tail = s.split(":", 1)[1].strip()
+            return f"group:{tail}" if tail else ""
         if s.isdigit():
             return f"group:{s}"
-        m = re.search(r"(?:GroupMessage|group):(\d+)", s, re.IGNORECASE)
+        m = re.search(r"(?:GroupMessage|group)\s*:\s*(\d+)", s, re.IGNORECASE)
         if m:
             return f"group:{m.group(1)}"
+        # 私聊不再冒充 group，避免私聊号与群号碰撞；统一归一为 private:xxx
+        mp = re.search(r"(?:FriendMessage|PrivateMessage|Private|Friend|User)\s*:\s*(\S+)", s, re.IGNORECASE)
+        if mp:
+            uid = re.sub(r"\D", "", mp.group(1)) or mp.group(1).strip()
+            return f"private:{uid}" if uid else s
         parts = s.split(":")
         if parts and parts[-1].isdigit():
-            return f"group:{parts[-1]}"
+            # 无法判断群/私时保守返回原串，由调用方按群优先处理
+            return s
         return s
 
     def _canonical_key(self, event_or_str: Any) -> str:
@@ -508,11 +551,32 @@ class DocMemoryPlugin(Star):
         try:
             gid = str(event_or_str.get_group_id() or "").strip()
             if gid:
-                return f"group:{gid}"
+                # 防止适配器已返回 group:123 形成双重前缀
+                if gid.lower().startswith("group:"):
+                    gid = gid.split(":", 1)[1].strip()
+                if gid:
+                    return f"group:{gid}"
         except Exception:
             pass
         umo = str(getattr(event_or_str, "unified_msg_origin", "") or "").strip()
-        return self._canonical_key_str(umo) or "default"
+        ck = self._canonical_key_str(umo)
+        if ck.startswith("private:") or ck.startswith("group:"):
+            return ck
+        # 私聊兜底：尝试取 sender id
+        try:
+            for attr in ("sender_id", "user_id", "qq", "uid"):
+                uid = str(getattr(event_or_str, attr, "") or "").strip()
+                if uid:
+                    return f"private:{re.sub(r'\\D', '', uid) or uid}"
+            msg_obj = getattr(event_or_str, "message_obj", None)
+            sender = getattr(msg_obj, "sender", None) if msg_obj is not None else None
+            if sender is not None:
+                uid = str(getattr(sender, "user_id", "") or getattr(sender, "id", "") or "").strip()
+                if uid:
+                    return f"private:{re.sub(r'\\D', '', uid) or uid}"
+        except Exception:
+            pass
+        return ck or "default"
 
     def _normalize_bindings(self, raw: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
         """标准化并自动合并同一群聊的历史 Key（如 group:123 与 default:GroupMessage:123）。"""
@@ -534,13 +598,7 @@ class DocMemoryPlugin(Star):
                 prompt = str(v.get("prompt") or "").strip()
                 shield = bool(v.get("shield", False))
                 force_sys = bool(v.get("force_system_prompt", False))
-                m = str(v.get("mode") or "reference").lower()
-                if m in ("system", "sys", "强制", "提示词", "1"):
-                    mode = "system"
-                elif m in ("workspace", "ws", "工作区", "沙箱", "3"):
-                    mode = "workspace"
-                else:
-                    mode = "reference"
+                mode = self._normalize_mode(v.get("mode"))
             else:
                 continue
 
@@ -565,8 +623,9 @@ class DocMemoryPlugin(Star):
         ck = self._canonical_key(event)
         keys = [ck]
         umo = str(getattr(event, "unified_msg_origin", "") or "").strip()
-        if umo and umo not in keys:
-            keys.append(umo)
+        for cand in (umo, self._canonical_key_str(umo)):
+            if cand and cand not in keys:
+                keys.append(cand)
         return keys
 
     def _get_entry(self, session_key: str) -> Dict[str, Any]:
@@ -574,6 +633,44 @@ class DocMemoryPlugin(Star):
         return self._bindings.setdefault(ck, {
             "doc_ids": [], "prompt": "", "shield": False, "mode": "reference", "force_system_prompt": False,
         })
+
+    def _peek_entry(self, session_key: str) -> Dict[str, Any]:
+        """只读不创建，避免每次对话污染 bindings。"""
+        return self._bindings.get(self._canonical_key_str(session_key)) or {}
+
+    @staticmethod
+    def _normalize_mode(mode: str) -> str:
+        m = str(mode or "").lower().strip()
+        if m in ("system", "sys", "强制", "提示词", "1"):
+            return "system"
+        if m in ("workspace", "ws", "工作区", "沙箱", "3"):
+            return "workspace"
+        return "reference"
+
+    @staticmethod
+    def _parse_doc_ids(*parts: str) -> List[str]:
+        """解析文档 ID：兼容空格/逗号/分号分隔，自动去重保序。"""
+        ids: List[str] = []
+        for p in parts:
+            if not p:
+                continue
+            for tok in re.split(r"[\s,;，；]+", str(p)):
+                t = tok.strip().strip(",;")
+                if t and t not in ids:
+                    ids.append(t)
+        return ids
+
+    def _find_matching_keys(self, event: AstrMessageEvent) -> List[str]:
+        """找到本会话所有命中的绑定 Key（解决新旧 Key 并存导致解绑遗漏）。"""
+        keys = []
+        for k in self._session_keys(event):
+            ck = self._canonical_key_str(k)
+            if ck in self._bindings and ck not in keys:
+                keys.append(ck)
+        ck = self._canonical_key(event)
+        if ck not in keys:
+            keys.append(ck)
+        return keys
 
     def get_bound_doc_ids(self, event: AstrMessageEvent) -> List[str]:
         ck = self._canonical_key(event)
@@ -629,21 +726,9 @@ class DocMemoryPlugin(Star):
         return ent
 
     def set_session_mode(self, session_key: str, mode: str) -> Dict[str, Any]:
+        # 允许预设模式（无文档也可设置，绑定后自动生效），与 WebUI 保持一致
         ent = self._get_entry(session_key)
-        # 若当前没有任何绑定文档，禁止切换文档生效模式
-        doc_ids = [d for d in ent.get("doc_ids", []) if d in self._index]
-        if not doc_ids:
-            ent["mode"] = "reference"
-            self._save_json(self.bindings_path, self._bindings)
-            return ent
-
-        m = str(mode or "").lower()
-        if m in ("system", "sys", "强制", "提示词", "1"):
-            ent["mode"] = "system"
-        elif m in ("workspace", "ws", "工作区", "沙箱", "3"):
-            ent["mode"] = "workspace"
-        else:
-            ent["mode"] = "reference"
+        ent["mode"] = self._normalize_mode(mode)
         self._save_json(self.bindings_path, self._bindings)
         return ent
 
@@ -656,9 +741,16 @@ class DocMemoryPlugin(Star):
         except Exception:
             return default
 
+    def _cfg_int(self, key: str, default: int) -> int:
+        try:
+            v = int(self._cfg(key, default))
+            return v if v > 0 else default
+        except Exception:
+            return default
+
     # ---------- 检索与上下文注入 ----------
     def retrieve(self, query: str, doc_ids: List[str], top_k: Optional[int] = None) -> List[Dict[str, Any]]:
-        top_k = top_k or self.top_k
+        top_k = top_k or self._cfg_int("top_k", self.top_k)
         clean_q = re.sub(r"@\S+", "", query or "").strip()
         qtokens = tokenize(clean_q)
         if not doc_ids:
@@ -675,8 +767,10 @@ class DocMemoryPlugin(Star):
             fname_hit = bool((fstem and fstem in q_lower) or (fname and fname in q_lower))
 
             chunks = self._load_chunks(did)
+            counters = self._get_chunk_counters(did)
             for idx, ch in enumerate(chunks):
-                s = score_chunk(qtokens, tokenize(ch)) if qtokens else 0.0
+                tf = counters[idx] if idx < len(counters) else Counter()
+                s = score_chunk_tf(qtokens, tf) if qtokens else 0.0
                 if fname_hit:
                     s += 10.0
                 if s > 0:
@@ -702,21 +796,57 @@ class DocMemoryPlugin(Star):
         return results
 
     def build_inject_text(self, query: str, doc_ids: List[str]) -> str:
-        hits = self.retrieve(query, doc_ids, self.top_k)
+        max_chars = self._cfg_int("max_inject_chars", self.max_inject_chars)
+        hits = self.retrieve(query, doc_ids, self._cfg_int("top_k", self.top_k))
         if not hits:
             return ""
         parts = []
         total = 0
         for h in hits:
             seg = f"{h['filename']} (片段{h['chunk_idx']+1}):\n{h['text']}"
-            if total + len(seg) > self.max_inject_chars:
-                remain = self.max_inject_chars - total
+            if total + len(seg) > max_chars:
+                remain = max_chars - total
                 if remain > 100:
                     parts.append(seg[:remain] + "\n…(截断)")
                 break
             parts.append(seg)
             total += len(seg)
         return "\n\n".join(parts)
+
+    # ---------- LLM 注入小工具（精简三处重复的 system_prompt 改写） ----------
+    @staticmethod
+    def _set_system_prompt(req, text: str, replace: bool) -> None:
+        text = str(text or "")
+        if replace:
+            try:
+                req.system_prompt = text
+            except Exception:
+                pass
+            for attr in ("contexts", "messages"):
+                ctx = getattr(req, attr, None)
+                if isinstance(ctx, list):
+                    has_sys = False
+                    for m in ctx:
+                        r = m.get("role") if isinstance(m, dict) else getattr(m, "role", "")
+                        if r == "system":
+                            if isinstance(m, dict):
+                                m["content"] = text
+                            else:
+                                try:
+                                    setattr(m, "content", text)
+                                except Exception:
+                                    pass
+                            has_sys = True
+                    if not has_sys and text:
+                        ctx.insert(0, {"role": "system", "content": text})
+        else:
+            if not text:
+                return
+            try:
+                cur = str(getattr(req, "system_prompt", "") or "").strip()
+                req.system_prompt = f"{cur}\n\n{text}".strip() if cur else text
+            except Exception:
+                pass
 
     # ---------- LLM 钩子 ----------
     @filter.on_llm_request()
@@ -729,17 +859,23 @@ class DocMemoryPlugin(Star):
             if is_private and not bool(self._cfg("allow_private_bind", True)):
                 return
 
-            c_key = self._canonical_key(event)
-            ent = self._get_entry(c_key)
-            doc_ids = [d for d in ent.get("doc_ids", []) if d in self._index]
+            # 只读不创建：避免每次对话凭空制造空绑定（曾导致解绑后仍残留空条目）
+            sess = self._effective_session(event)
+            c_key = str(sess.get("matched_key") or self._canonical_key(event))
+            doc_ids = [d for d in sess.get("doc_ids", []) if d in self._index]
             has_bound = bool(doc_ids)
-            shield = bool(ent.get("shield", False))
-            mode = str(ent.get("mode") or "reference").lower()
-            custom_prompt = str(ent.get("prompt") or "").strip()
-            force_sys = bool(ent.get("force_system_prompt", False))
+            shield = bool(sess.get("shield", False))
+            mode = str(sess.get("mode") or "reference").lower()
+            custom_prompt = str(sess.get("prompt") or "").strip()
+            ent_raw = self._bindings.get(c_key) or {}
+            for k in self._session_keys(event):
+                if k in self._bindings:
+                    ent_raw = self._bindings[k]
+                    break
+            ignore_history = bool(ent_raw.get("ignore_history", False))
 
             # 0. /doc no 指令支持：彻底清空此前所有历史消息，不再读取与记忆
-            if ent.get("ignore_history"):
+            if ignore_history:
                 if hasattr(req, "contexts") and isinstance(req.contexts, list):
                     req.contexts.clear()
                 if hasattr(req, "messages") and isinstance(req.messages, list):
@@ -755,29 +891,11 @@ class DocMemoryPlugin(Star):
             # -------------------------------------------------------------
             # 第一优先级通道：只有系统提示词模式 (无文档，或已开启 force_system_prompt)
             # -------------------------------------------------------------
+            force_sys = bool(sess.get("force_system_prompt", False))
+            max_chars = self._cfg_int("max_inject_chars", self.max_inject_chars)
             if (not has_bound and custom_prompt) or (force_sys and custom_prompt):
                 target_prompt = custom_prompt
-                if shield or force_sys:
-                    # 彻底清空抹除自带人格，专属提示词直接作为底层唯一系统词
-                    req.system_prompt = target_prompt
-                    for attr in ("contexts", "messages"):
-                        ctx = getattr(req, attr, None)
-                        if isinstance(ctx, list):
-                            has_sys = False
-                            for m in ctx:
-                                r = m.get("role") if isinstance(m, dict) else getattr(m, "role", "")
-                                if r == "system":
-                                    if isinstance(m, dict): m["content"] = target_prompt
-                                    else:
-                                        try: setattr(m, "content", target_prompt)
-                                        except Exception: pass
-                                    has_sys = True
-                            if not has_sys:
-                                ctx.insert(0, {"role": "system", "content": target_prompt})
-                else:
-                    # 保留原人格，追加专属提示词
-                    cur = str(getattr(req, "system_prompt", "") or "").strip()
-                    req.system_prompt = f"{cur}\n\n{target_prompt}".strip() if cur else target_prompt
+                self._set_system_prompt(req, target_prompt, replace=bool(shield or force_sys))
 
                 if not has_bound:
                     logger.info(f"[{PLUGIN_NAME}] [专属系统词模式] 无文档，专属系统提示词独立生效 (会话: {c_key})")
@@ -786,21 +904,11 @@ class DocMemoryPlugin(Star):
             # 无文档且无提示词时的空载响应
             if not has_bound:
                 if shield:
-                    req.system_prompt = ""
-                    for attr in ("contexts", "messages"):
-                        ctx = getattr(req, attr, None)
-                        if isinstance(ctx, list):
-                            for m in ctx:
-                                r = m.get("role") if isinstance(m, dict) else getattr(m, "role", "")
-                                if r == "system":
-                                    if isinstance(m, dict): m["content"] = ""
-                                    else:
-                                        try: setattr(m, "content", "")
-                                        except Exception: pass
+                    self._set_system_prompt(req, "", replace=True)
                 return
 
             # -------------------------------------------------------------
-            # 模式 1：⚡ 强制遵守文档 (文档直接作为系统提示词，专属提示词作为额外附加提示词，0其余提示词)
+            # 模式 1：⚡ 强制遵守文档 (文档直接作为系统提示词，专属提示词作为额外附加提示词)
             # -------------------------------------------------------------
             if mode == "system" and has_bound:
                 doc_contents = []
@@ -808,43 +916,24 @@ class DocMemoryPlugin(Star):
                     chunks = self._load_chunks(did)
                     doc_contents.append("\n".join(chunks))
                 combined_docs = "\n\n".join(doc_contents)
-                if len(combined_docs) > self.max_inject_chars:
-                    combined_docs = combined_docs[:self.max_inject_chars] + "\n…(截断)"
+                if len(combined_docs) > max_chars:
+                    combined_docs = combined_docs[:max_chars] + "\n…(截断)"
 
                 if custom_prompt:
                     system_prompt_final = f"{combined_docs}\n\n{custom_prompt}"
                 else:
                     system_prompt_final = combined_docs
 
-                if shield:
-                    # 屏蔽 AstrBot 人格：确保 0 额外提示词，仅包含纯净文档与用户提示词
-                    req.system_prompt = system_prompt_final
-                    for attr in ("contexts", "messages"):
-                        ctx = getattr(req, attr, None)
-                        if isinstance(ctx, list):
-                            has_sys = False
-                            for m in ctx:
-                                r = m.get("role") if isinstance(m, dict) else getattr(m, "role", "")
-                                if r == "system":
-                                    if isinstance(m, dict): m["content"] = system_prompt_final
-                                    else:
-                                        try: setattr(m, "content", system_prompt_final)
-                                        except Exception: pass
-                                    has_sys = True
-                            if not has_sys:
-                                ctx.insert(0, {"role": "system", "content": system_prompt_final})
-                else:
-                    cur_sys = str(getattr(req, "system_prompt", "") or "").strip()
-                    req.system_prompt = f"{cur_sys}\n\n{system_prompt_final}".strip() if cur_sys else system_prompt_final
+                self._set_system_prompt(req, system_prompt_final, replace=shield)
 
                 # 保持 req.prompt 纯净，绝不向用户发言拼入文档正文
                 logger.info(f"[{PLUGIN_NAME}] [强制遵守模式] 文档已作为系统提示词载入 (会话: {c_key})")
                 return
 
             # -------------------------------------------------------------
-            # 模式 3：💻 模拟工作区模式 (纯净工作区文档，0其余说教提示词)
+            # 模式 3：💻 模拟工作区模式 (需有绑定文档，否则回落到参考资料逻辑)
             # -------------------------------------------------------------
-            if mode == "workspace":
+            if mode == "workspace" and has_bound:
                 file_sections = []
                 total_chars = 0
 
@@ -853,11 +942,11 @@ class DocMemoryPlugin(Star):
                     fname = meta.get("filename", did)
                     chunks = self._load_chunks(did)
                     body = "\n".join(chunks)
-                    if total_chars + len(body) <= self.max_inject_chars:
+                    if total_chars + len(body) <= max_chars:
                         file_sections.append(f"/workspace/{fname}:\n{body}")
                         total_chars += len(body)
                     else:
-                        remain = max(0, self.max_inject_chars - total_chars)
+                        remain = max(0, max_chars - total_chars)
                         if remain > 200:
                             file_sections.append(f"/workspace/{fname}:\n{body[:remain]}\n…(截断)")
                             total_chars += remain
@@ -868,26 +957,7 @@ class DocMemoryPlugin(Star):
                 else:
                     ws_final = ws_content
 
-                if shield:
-                    # 屏蔽 AstrBot 人格：确保全部 0 额外提示词，仅包含纯净工作区文件
-                    req.system_prompt = ws_final
-                    for attr in ("contexts", "messages"):
-                        ctx = getattr(req, attr, None)
-                        if isinstance(ctx, list):
-                            has_sys = False
-                            for m in ctx:
-                                r = m.get("role") if isinstance(m, dict) else getattr(m, "role", "")
-                                if r == "system":
-                                    if isinstance(m, dict): m["content"] = ws_final
-                                    else:
-                                        try: setattr(m, "content", ws_final)
-                                        except Exception: pass
-                                    has_sys = True
-                            if not has_sys and ws_final:
-                                ctx.insert(0, {"role": "system", "content": ws_final})
-                else:
-                    cur_sys = str(getattr(req, "system_prompt", "") or "").strip()
-                    req.system_prompt = f"{cur_sys}\n\n{ws_final}".strip() if cur_sys else ws_final
+                self._set_system_prompt(req, ws_final, replace=shield)
 
                 # 保持 req.prompt 纯净，绝不向用户发言拼入工作区文件
                 logger.info(f"[{PLUGIN_NAME}] [工作区模式] 纯净挂载工作区文件 (会话: {c_key})")
@@ -897,27 +967,15 @@ class DocMemoryPlugin(Star):
             # 模式 2：📖 仅作参考资料 (AI记忆库中有这些文档，纯净无额外提示词)
             # -------------------------------------------------------------
             if shield:
-                req.system_prompt = custom_prompt if custom_prompt else ""
-                for attr in ("contexts", "messages"):
-                    ctx = getattr(req, attr, None)
-                    if isinstance(ctx, list):
-                        has_sys = False
-                        for m in ctx:
-                            r = m.get("role") if isinstance(m, dict) else getattr(m, "role", "")
-                            if r == "system":
-                                if isinstance(m, dict): m["content"] = req.system_prompt
-                                else:
-                                    try: setattr(m, "content", req.system_prompt)
-                                    except Exception: pass
-                                has_sys = True
-                        if not has_sys and req.system_prompt:
-                            ctx.insert(0, {"role": "system", "content": req.system_prompt})
+                self._set_system_prompt(req, custom_prompt if custom_prompt else "", replace=True)
             else:
-                if custom_prompt:
-                    cur = str(getattr(req, "system_prompt", "") or "").strip()
-                    req.system_prompt = f"{cur}\n\n{custom_prompt}".strip() if cur else custom_prompt
+                self._set_system_prompt(req, custom_prompt, replace=False)
 
             if not has_bound:
+                return
+
+            # auto_inject 关闭时不再自动检索文档（专属提示词/屏蔽仍生效）
+            if not bool(self._cfg("auto_inject", True)):
                 return
 
             query = str(getattr(req, "prompt", "") or event.message_str or "").strip()
@@ -925,13 +983,22 @@ class DocMemoryPlugin(Star):
             if not inject:
                 return
 
-            # 写入 extra_user_content_parts 官方标准通道
+            # 写入 extra_user_content_parts 官方标准通道；缺失时回退拼接到 prompt
+            injected = False
             parts = getattr(req, "extra_user_content_parts", None)
             if parts is not None and _HAS_TEXT_PART and TextPart is not None:
                 try:
-                    tp = TextPart(text=inject)
-                    if hasattr(tp, "mark_as_temp"): tp = tp.mark_as_temp()
+                    tp = TextPart(text=f"【参考资料】\n{inject}")
+                    if hasattr(tp, "mark_as_temp"):
+                        tp = tp.mark_as_temp()
                     parts.append(tp)
+                    injected = True
+                except Exception:
+                    injected = False
+            if not injected:
+                try:
+                    base = str(getattr(req, "prompt", "") or "")
+                    req.prompt = f"{base}\n\n【参考资料】\n{inject}".strip()
                 except Exception:
                     pass
 
@@ -962,7 +1029,7 @@ class DocMemoryPlugin(Star):
         if not doc_ids:
             yield event.plain_result("本会话尚未绑定任何文档。")
             return
-        hits = self.retrieve(query or event.message_str or "", doc_ids, self.top_k)
+        hits = self.retrieve(query or event.message_str or "", doc_ids, self._cfg_int("top_k", self.top_k))
         if not hits:
             yield event.plain_result("在绑定文档中未匹配到相关内容。")
             return
@@ -1151,9 +1218,9 @@ class DocMemoryPlugin(Star):
     async def doc_workspace(self, event: AstrMessageEvent):
         """查看当前模拟工作区状态与文件清单 /doc workspace"""
         ids = self.get_bound_doc_ids(event)
-        key = self._canonical_key(event)
-        ent = self._get_entry(key)
-        mode = str(ent.get("mode") or "reference")
+        sess = self._effective_session(event)
+        key = str(sess.get("matched_key") or self._canonical_key(event))
+        mode = str(sess.get("mode") or "reference")
 
         if not ids:
             yield event.plain_result(
@@ -1205,8 +1272,8 @@ class DocMemoryPlugin(Star):
 
     async def doc_bind(self, event: AstrMessageEvent, doc_id: str = ""):
         """绑定文档 /doc bind <id1> [id2...]（管理员）"""
-        tokens = [t for t in re.split(r"\s+", (event.message_str or "").strip()) if t][2:]
-        ids = list(dict.fromkeys([doc_id] + tokens if doc_id else tokens))
+        raw_tokens = [t for t in re.split(r"\s+", (event.message_str or "").strip()) if t][2:]
+        ids = self._parse_doc_ids(doc_id, " ".join(raw_tokens))
         if not ids:
             yield event.plain_result(
                 "❌ 用法错误：/doc bind <文档ID1> [文档ID2...]\n"
@@ -1219,8 +1286,9 @@ class DocMemoryPlugin(Star):
             return
         key = self._canonical_key(event)
         self.bind_docs(key, ids)
-        ent = self._get_entry(key)
-        mode_txt = "⚡ 强制遵守（系统提示词）" if ent.get("mode") == "system" else "📖 仅作参考资料"
+        ent = self._peek_entry(key)
+        m = str(ent.get("mode") or "reference")
+        mode_txt = "⚡ 强制遵守（系统提示词）" if m == "system" else ("💻 模拟工作区" if m == "workspace" else "📖 仅作参考资料")
 
         lines = [
             f"✅ 绑定成功！已关联到本群（{key}）：\n",
@@ -1235,20 +1303,49 @@ class DocMemoryPlugin(Star):
 
     async def doc_unbind(self, event: AstrMessageEvent, doc_id: str = ""):
         """解绑文档 /doc unbind [id...]，留空则清空绑定（管理员）"""
-        key = self._canonical_key(event)
-        ent = self._get_entry(key)
-        if not ent.get("doc_ids"):
-            yield event.plain_result(f"⚠️ 本群（{key}）当前未绑定任何文档。")
+        keys = self._find_matching_keys(event)
+        main_key = keys[0]
+        targets = [k for k in keys if (self._bindings.get(k) or {}).get("doc_ids")]
+        if not targets:
+            yield event.plain_result(f"⚠️ 本群（{main_key}）当前未绑定任何文档。")
             return
-        if not doc_id:
-            ent["doc_ids"] = []
+        raw_tokens = [t for t in re.split(r"\s+", (event.message_str or "").strip()) if t][2:]
+        # 留空 = 清空全部（含历史重复 Key），并自动回落模式，避免空工作区残留
+        if not doc_id and not raw_tokens:
+            for k in targets:
+                ent = self._bindings.get(k) or {}
+                ent["doc_ids"] = []
+                if str(ent.get("mode") or "") in ("system", "workspace"):
+                    ent["mode"] = "reference"
             self._save_json(self.bindings_path, self._bindings)
-            yield event.plain_result(f"✅ 已清空本群（{key}）的所有文档绑定。（专属提示词与屏蔽设置仍保留）")
+            yield event.plain_result(f"✅ 已清空本群（{main_key}）的所有文档绑定，模式已回落为参考资料。（专属提示词与屏蔽设置仍保留）")
             return
-        tokens = set([t for t in re.split(r"\s+", (event.message_str or "").strip()) if t][2:] + [doc_id])
-        ent["doc_ids"] = [d for d in ent["doc_ids"] if d not in tokens]
+        tokens = self._parse_doc_ids(doc_id, " ".join(raw_tokens))
+        removed: List[str] = []
+        not_found: List[str] = []
+        for t in tokens:
+            hit = False
+            for k in targets:
+                ent = self._bindings.get(k) or {}
+                if t in ent.get("doc_ids", []):
+                    ent["doc_ids"] = [d for d in ent["doc_ids"] if d != t]
+                    hit = True
+            (removed if hit else not_found).append(t)
+        # 若解绑后已无文档，自动回落模式，与 WebUI 解绑保持一致
+        remaining = sum(len((self._bindings.get(k) or {}).get("doc_ids", [])) for k in targets)
+        if remaining == 0:
+            for k in targets:
+                ent = self._bindings.get(k) or {}
+                if str(ent.get("mode") or "") in ("system", "workspace"):
+                    ent["mode"] = "reference"
         self._save_json(self.bindings_path, self._bindings)
-        yield event.plain_result(f"✅ 已成功解绑文档：{', '.join(sorted(tokens))}\n本群当前剩余：{len(ent['doc_ids'])} 篇文档。")
+        msg = f"✅ 解绑完成（{main_key}）："
+        if removed:
+            msg += f"\n• 已移除：{', '.join(removed)}"
+        if not_found:
+            msg += f"\n• 未绑定/不存在：{', '.join(not_found)}"
+        msg += f"\n本群当前剩余：{remaining} 篇文档。"
+        yield event.plain_result(msg)
 
     async def doc_search(self, event: AstrMessageEvent, keyword: str = ""):
         """检索绑定文档 /doc search <关键词>"""
@@ -1260,7 +1357,7 @@ class DocMemoryPlugin(Star):
         if not ids:
             yield event.plain_result("⚠️ 本群尚未绑定任何文档，请先使用 /doc bind <ID> 绑定。")
             return
-        hits = self.retrieve(q, ids, self.top_k)
+        hits = self.retrieve(q, ids, self._cfg_int("top_k", self.top_k))
         if not hits:
             yield event.plain_result(f"🔍 未在已绑定文档中检索到与「{q}」相关的片段，可尝试更换搜索词。")
             return
@@ -1300,7 +1397,12 @@ class DocMemoryPlugin(Star):
         mode = str(sess.get("mode") or "reference")
         preview = (eff_prompt[:260] + "…") if len(eff_prompt) > 260 else eff_prompt
         shield_desc = "🛡️ 已开启（清空原人格）" if eff_shield else "👤 已关闭（保留原人格）"
-        mode_desc = "⚡ 强制AI遵守文档（系统提示词）" if mode == "system" else "📖 仅作参考资料（按需检索）"
+        if mode == "system":
+            mode_desc = "⚡ 强制AI遵守文档（系统提示词）"
+        elif mode == "workspace":
+            mode_desc = "💻 模拟工作区（工作区文件挂载）"
+        else:
+            mode_desc = "📖 仅作参考资料（按需检索）"
 
         yield event.plain_result(
             "🧩 本群配置详情\n\n"
@@ -1318,31 +1420,23 @@ class DocMemoryPlugin(Star):
     async def doc_mode(self, event: AstrMessageEvent, mode: str = ""):
         """设置本群文档生效模式 /doc mode workspace|system|reference（管理员）"""
         key = self._canonical_key(event)
-        ent = self._get_entry(key)
-        doc_ids = [d for d in ent.get("doc_ids", []) if d in self._index]
-        if not doc_ids:
-            yield event.plain_result(
-                f"⚠️ 本群（{key}）当前未绑定任何文档。\n\n"
-                "文档生效模式（强制遵守 / 工作区 / 仅作参考）仅在挂载文档后生效。\n"
-                "💡 请先使用 /doc bind <ID> 绑定文档，或直接配置专属提示词。"
-            )
-            return
-
+        ent = self._peek_entry(key)
         raw = (mode or re.sub(r"^/doc\s+mode\s*", "", event.message_str or "")).strip().lower()
-        if raw in ("workspace", "ws", "工作区", "沙箱", "3"):
+        norm = self._normalize_mode(raw) if raw else ""
+        if norm == "workspace":
             self.set_session_mode(key, "workspace")
             yield event.plain_result(
                 f"💻 本群模式已切换为【模拟工作区】！\n\n"
                 f"当前会话已挂载进入独立工作区沙箱 (/workspace)，上下文中【仅包含】绑定的文档文件，模型将严格基于工作区文件进行专业分析、开发与问答。\n"
                 f"💡 可发送 /doc workspace 查看工作区挂载清单。"
             )
-        elif raw in ("system", "sys", "强制", "提示词", "1"):
+        elif norm == "system":
             self.set_session_mode(key, "system")
             yield event.plain_result(
                 f"⚡ 本群模式已切换为【强制遵守文档】！\n\n"
                 f"文档将直接作为最高优先级系统提示词载入大模型，AI 将严格遵循文档中的一切角色设定、语言规范与指令要求。"
             )
-        elif raw in ("reference", "ref", "参考", "资料", "读取", "2"):
+        elif norm == "reference" and raw:
             self.set_session_mode(key, "reference")
             yield event.plain_result(
                 f"📖 本群模式已切换为【仅作参考资料】！\n\n"
@@ -1579,7 +1673,12 @@ class DocMemoryPlugin(Star):
         for k, ent in self._bindings.items():
             ids = ent.get("doc_ids", [])
             ks = str(k).strip()
-            gid = ks.split(":", 1)[1] if ks.startswith("group:") else (ks if ks.isdigit() else ks.split(":")[-1])
+            if ks.startswith("private:"):
+                gid = ks.split(":", 1)[1]
+            elif ks.startswith("group:"):
+                gid = ks.split(":", 1)[1]
+            else:
+                gid = ks if ks.isdigit() else ks.split(":")[-1]
             gname = ""
             if gid and gid in self._seen_groups:
                 gname = str(self._seen_groups[gid].get("group_name") or "").strip()
@@ -1620,13 +1719,7 @@ class DocMemoryPlugin(Star):
         if "force_system_prompt" in payload:
             ent["force_system_prompt"] = bool(payload.get("force_system_prompt"))
         if "mode" in payload:
-            m = str(payload.get("mode") or "reference").lower()
-            if m in ("system", "sys", "强制", "提示词", "1"):
-                ent["mode"] = "system"
-            elif m in ("workspace", "ws", "工作区", "沙箱", "3"):
-                ent["mode"] = "workspace"
-            else:
-                ent["mode"] = "reference"
+            ent["mode"] = self._normalize_mode(payload.get("mode"))
 
         self._save_json(self.bindings_path, self._bindings)
         return json_response({
@@ -1638,13 +1731,14 @@ class DocMemoryPlugin(Star):
         })
 
     def _find_all_bots(self) -> List[Any]:
-        """全量递归挖掘 context 与当前上下文中的所有 Bot / PlatformAdapter 实例。"""
+        """挖掘 context 中的 Bot / PlatformAdapter 实例（仅遍历已知属性，避免 dir 全掃卡顿）。"""
         import inspect
         targets = []
         visited = set()
+        _ATTRS = ("platforms", "adapters", "bots", "clients", "platform", "adapter", "bot", "client")
 
         def _traverse(obj, depth=0):
-            if depth > 4 or obj is None:
+            if depth > 3 or obj is None:
                 return
             oid = id(obj)
             if oid in visited:
@@ -1652,31 +1746,30 @@ class DocMemoryPlugin(Star):
             visited.add(oid)
 
             # 具备动作调用能力的适配器或 Bot
-            if any(hasattr(obj, m) and callable(getattr(obj, m)) for m in ("call_action", "call_api", "get_group_list")):
-                targets.append(obj)
+            if any(callable(getattr(obj, m, None)) for m in ("call_action", "call_api", "get_group_list")):
+                if obj not in targets:
+                    targets.append(obj)
+                if depth >= 2:
+                    return
 
-            # 检查属性
-            for attr in dir(obj):
-                if attr.startswith("__"):
-                    continue
-                lower = attr.lower()
-                if any(k in lower for k in ("platform", "adapter", "bot", "client", "connection", "ws", "manager")):
-                    try:
-                        val = getattr(obj, attr, None)
-                        if callable(val) or inspect.isclass(val):
-                            continue
-                        if val is None:
-                            continue
-                        if isinstance(val, (list, tuple, set)):
-                            for item in val:
-                                _traverse(item, depth + 1)
-                        elif isinstance(val, dict):
-                            for item in val.values():
-                                _traverse(item, depth + 1)
-                        else:
-                            _traverse(val, depth + 1)
-                    except Exception:
-                        pass
+            # 仅遍历已知容器属性
+            for attr in _ATTRS:
+                try:
+                    if not hasattr(obj, attr):
+                        continue
+                    val = getattr(obj, attr, None)
+                    if val is None or callable(val) or inspect.isclass(val):
+                        continue
+                    if isinstance(val, (list, tuple, set)):
+                        for item in val:
+                            _traverse(item, depth + 1)
+                    elif isinstance(val, dict):
+                        for item in val.values():
+                            _traverse(item, depth + 1)
+                    else:
+                        _traverse(val, depth + 1)
+                except Exception:
+                    pass
 
         if getattr(self, "_latest_bot", None) is not None:
             _traverse(self._latest_bot, 0)
@@ -1684,45 +1777,61 @@ class DocMemoryPlugin(Star):
         return targets
 
     async def _fetch_platform_groups(self) -> List[Dict[str, Any]]:
-        """主动向平台适配器（OneBot/aiocqhttp 等）拉取机器人当前实际加入的群组列表。"""
+        """主动向平台适配器拉取群组（并发调用，首个成功即停）。"""
         import asyncio
         found_groups: Dict[str, Dict[str, Any]] = {}
         bots = self._find_all_bots()
 
         actions = ["get_group_list", "getGroupList", "get_groups", "list_groups", "get_joined_groups"]
-        for cand in bots:
-            for act in actions:
-                info = None
-                try:
-                    if hasattr(cand, "call_action") and callable(cand.call_action):
-                        info = await asyncio.wait_for(cand.call_action(act), timeout=6)
-                    elif hasattr(cand, "call_api") and callable(cand.call_api):
-                        info = await asyncio.wait_for(cand.call_api(act), timeout=6)
-                    elif hasattr(cand, act) and callable(getattr(cand, act)):
-                        info = await asyncio.wait_for(getattr(cand, act)(), timeout=6)
-                except Exception:
-                    continue
 
-                if info is not None:
-                    data = (info.get("data") if isinstance(info, dict) else None) or info or []
-                    if isinstance(data, list) and data:
-                        for g in data:
-                            if not isinstance(g, dict):
-                                continue
-                            gid = str(g.get("group_id") or g.get("gid") or g.get("id") or "").strip()
-                            if not gid:
-                                continue
-                            gname = str(g.get("group_name") or g.get("name") or g.get("title") or "").strip()
+        async def _call(cand, act):
+            try:
+                if callable(getattr(cand, "call_action", None)):
+                    return await asyncio.wait_for(cand.call_action(act), timeout=5)
+                if callable(getattr(cand, "call_api", None)):
+                    return await asyncio.wait_for(cand.call_api(act), timeout=5)
+                fn = getattr(cand, act, None)
+                if callable(fn):
+                    return await asyncio.wait_for(fn(), timeout=5)
+            except Exception:
+                pass
+            return None
+
+        for cand in bots[:5]:
+            tasks = [_call(cand, act) for act in actions]
+            try:
+                results = await asyncio.gather(*tasks, return_exceptions=True)
+            except Exception:
+                continue
+            got = False
+            for info in results:
+                if not isinstance(info, (dict, list)):
+                    continue
+                data = (info.get("data") if isinstance(info, dict) else None) or info or []
+                if isinstance(data, list) and data and isinstance(data[0], dict):
+                    for g in data:
+                        if not isinstance(g, dict):
+                            continue
+                        gid = str(g.get("group_id") or g.get("gid") or g.get("id") or "").strip()
+                        if not gid:
+                            continue
+                        gname = str(g.get("group_name") or g.get("name") or g.get("title") or "").strip()
+                        try:
                             m_count = int(g.get("member_count") or g.get("members_count") or 0)
-                            p_name = str(getattr(cand, "platform_name", "") or getattr(cand, "name", "") or "onebot")
-                            found_groups[gid] = {
-                                "gid": gid,
-                                "group_name": gname,
-                                "member_count": m_count,
-                                "platform": p_name,
-                                "last_seen": int(time.time()),
-                                "msg_count": m_count,
-                            }
+                        except Exception:
+                            m_count = 0
+                        p_name = str(getattr(cand, "platform_name", "") or getattr(cand, "name", "") or "onebot")
+                        found_groups[gid] = {
+                            "gid": gid,
+                            "group_name": gname,
+                            "member_count": m_count,
+                            "platform": p_name,
+                            "last_seen": int(time.time()),
+                            "msg_count": m_count,
+                        }
+                    got = True
+            if got:
+                break
 
         now = int(time.time())
         for gid, item in found_groups.items():
@@ -1757,6 +1866,8 @@ class DocMemoryPlugin(Star):
 
         for k in (self._bindings or {}).keys():
             ks = str(k).strip()
+            if ks.startswith("private:"):
+                continue  # 私聊绑定不在群列表展示，避免与群号碰撞
             gid = ks.split(":", 1)[1] if ks.startswith("group:") else (ks if ks.isdigit() else ks.split(":")[-1])
             if gid.isdigit() and gid not in merged:
                 merged[gid] = {
@@ -1764,10 +1875,13 @@ class DocMemoryPlugin(Star):
                     "msg_count": 0, "last_seen": 0, "bound": True,
                 }
 
-        bound_gids = {
-            str(k).split(":", 1)[1] if str(k).startswith("group:") else str(k)
-            for k in self._bindings.keys()
-        }
+        bound_gids = set()
+        for k in self._bindings.keys():
+            ks = str(k)
+            if ks.startswith("group:"):
+                bound_gids.add(ks.split(":", 1)[1])
+            elif ks.isdigit():
+                bound_gids.add(ks)
         for g in merged.values():
             if g["gid"] in bound_gids:
                 g["bound"] = True
