@@ -1,4 +1,4 @@
-# 文档记忆助手 xbdoc
+# 文档记忆助手 xbdoc（`astrbot_plugin_xbdoc`）
 
 让 AI 读懂你的 md / txt / pdf / docx / png / json 文档与酒馆角色卡，并按群记住与执行。
 
@@ -21,7 +21,7 @@
 
 ## 安装
 
-把 `xbdoc` 打包为 zip，在 AstrBot WebUI → **插件** → **安装插件** → **上传安装** 即可。
+把 `astrbot_plugin_xbdoc` 打包为 zip，在 AstrBot WebUI → **插件** → **安装插件** → **上传安装** 即可。
 
 依赖说明：如需解析 PDF 或 DOCX，请安装 `requirements.txt` 中的可选依赖。纯文本、Markdown、JSON 与酒馆 PNG 角色卡无需额外依赖，开箱即用。
 

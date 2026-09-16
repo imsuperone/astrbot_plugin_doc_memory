@@ -13,8 +13,8 @@ from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star
 
-PLUGIN_NAME = "xbdoc"
-OLD_PLUGIN_NAME = "astrbot_plugin_doc_memory"
+PLUGIN_NAME = "astrbot_plugin_xbdoc"
+OLD_PLUGIN_NAMES = ("xbdoc", "astrbot_plugin_doc_memory")
 
 # 可选 Web API 依赖
 try:
@@ -281,20 +281,22 @@ class XbdocPlugin(Star):
     # ---------- 路径与持久化 ----------
     def _resolve_data_dir(self) -> Path:
         # 新插件名优先；若旧目录存在则自动迁移，保证改名不丢数据
-        candidates: List[Path] = []
         if _HAS_DATA_PATH:
             try:
                 base = Path(get_astrbot_data_path()) / "plugin_data"
                 new_p = base / PLUGIN_NAME
-                old_p = base / OLD_PLUGIN_NAME
-                if not new_p.exists() and old_p.exists():
-                    try:
-                        import shutil
-                        shutil.copytree(old_p, new_p)
-                        logger.info(f"[{PLUGIN_NAME}] 已从旧数据目录迁移: {old_p} -> {new_p}")
-                    except Exception as e:
-                        logger.warning(f"[{PLUGIN_NAME}] 数据迁移失败，将直接使用旧目录: {e}")
-                        return old_p
+                if not new_p.exists():
+                    for legacy in OLD_PLUGIN_NAMES:
+                        old_p = base / legacy
+                        if old_p.exists():
+                            try:
+                                import shutil
+                                shutil.copytree(old_p, new_p)
+                                logger.info(f"[{PLUGIN_NAME}] 已从旧数据目录迁移: {old_p} -> {new_p}")
+                            except Exception as e:
+                                logger.warning(f"[{PLUGIN_NAME}] 数据迁移失败，将直接使用旧目录: {e}")
+                                return old_p
+                            break
                 return new_p
             except Exception:
                 pass
@@ -710,6 +712,27 @@ class XbdocPlugin(Star):
         self._get_entry(session_key)["doc_ids"] = valid
         self._save_json(self.bindings_path, self._bindings)
         return valid
+
+    def _prune_empty_entry(self, session_key: str) -> bool:
+        """解绑后若该会话无文档、无提示词、无屏蔽/强制/断史且为默认模式，则彻底删除条目。
+
+        避免 bindings.json 堆积空壳，会话列表看着像“没解掉”。
+        """
+        ck = self._canonical_key_str(session_key)
+        ent = self._bindings.get(ck)
+        if not ent:
+            return False
+        if (
+            not ent.get("doc_ids")
+            and not str(ent.get("prompt") or "").strip()
+            and not ent.get("shield", False)
+            and not ent.get("force_system_prompt", False)
+            and not ent.get("ignore_history", False)
+            and str(ent.get("mode") or "reference") == "reference"
+        ):
+            self._bindings.pop(ck, None)
+            return True
+        return False
 
     def set_session_prompt(self, session_key: str, prompt: str, enabled: Optional[bool] = None) -> Dict[str, Any]:
         ent = self._get_entry(session_key)
@@ -1317,8 +1340,10 @@ class XbdocPlugin(Star):
                 ent["doc_ids"] = []
                 if str(ent.get("mode") or "") in ("system", "workspace"):
                     ent["mode"] = "reference"
+            pruned = sum(1 for k in targets if self._prune_empty_entry(k))
             self._save_json(self.bindings_path, self._bindings)
-            yield event.plain_result(f"✅ 已清空本群（{main_key}）的所有文档绑定，模式已回落为参考资料。（专属提示词与屏蔽设置仍保留）")
+            tail = "空配置已彻底移除。" if pruned else "（专属提示词与屏蔽设置仍保留）"
+            yield event.plain_result(f"✅ 已清空本群（{main_key}）的所有文档绑定，模式已回落为参考资料。{tail}")
             return
         tokens = self._parse_doc_ids(doc_id, " ".join(raw_tokens))
         removed: List[str] = []
@@ -1338,6 +1363,8 @@ class XbdocPlugin(Star):
                 ent = self._bindings.get(k) or {}
                 if str(ent.get("mode") or "") in ("system", "workspace"):
                     ent["mode"] = "reference"
+            for k in targets:
+                self._prune_empty_entry(k)
         self._save_json(self.bindings_path, self._bindings)
         msg = f"✅ 解绑完成（{main_key}）："
         if removed:
@@ -1473,8 +1500,12 @@ class XbdocPlugin(Star):
     async def doc_prompt_clear(self, event: AstrMessageEvent):
         """清空本群提示词 /doc prompt_clear（管理员）"""
         key = self._canonical_key(event)
-        ent = self._get_entry(key)
+        ent = self._peek_entry(key)
+        if not ent:
+            yield event.plain_result(f"⚠️ 本群（{key}）当前未设置专属提示词。")
+            return
         ent["prompt"] = ""
+        self._prune_empty_entry(key)
         self._save_json(self.bindings_path, self._bindings)
         yield event.plain_result(f"✅ 已清空本群（{key}）专属提示词。")
 
@@ -1496,6 +1527,8 @@ class XbdocPlugin(Star):
             return
 
         self.set_session_shield(key, target_shield)
+        self._prune_empty_entry(key)
+        self._save_json(self.bindings_path, self._bindings)
         if target_shield:
             yield event.plain_result(f"🛡️ 本群已开启人格屏蔽！已彻底清空 AstrBot 自带人格，进入纯文档/提示词模式。")
         else:
@@ -1519,6 +1552,7 @@ class XbdocPlugin(Star):
             return
 
         ent["force_system_prompt"] = target
+        self._prune_empty_entry(key)
         self._save_json(self.bindings_path, self._bindings)
         if target:
             yield event.plain_result(f"⚡【强制注入系统提示词已开启】\n会话（{key}）：将清空其他一切提示词，强制本群专属提示词为唯一底层系统提示词。")
@@ -1721,6 +1755,7 @@ class XbdocPlugin(Star):
         if "mode" in payload:
             ent["mode"] = self._normalize_mode(payload.get("mode"))
 
+        self._prune_empty_entry(key)
         self._save_json(self.bindings_path, self._bindings)
         return json_response({
             "ok": True, "session_key": key, "doc_ids": valid,

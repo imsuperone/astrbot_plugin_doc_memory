@@ -2,7 +2,7 @@
 (function () {
   "use strict";
 
-  const PLUGIN_ID = "xbdoc";
+  const PLUGIN_ID = "astrbot_plugin_xbdoc";
 
   // ---- Safe Bridge & API Layer ----
   function getBridge() {

@@ -1,4 +1,4 @@
-name: xbdoc
+name: astrbot_plugin_xbdoc
 display_name: 文档记忆助手
 short_desc: WebUI上传文档/酒馆卡，按群绑定，大模型对话自动引用。
 desc: |
@@ -10,7 +10,7 @@ desc: |
   - 三大生效模式：强制遵守模式、模拟工作区模式、仅作参考资料模式
   - 支持强制注入系统提示词（清空其他提示词，专属提示词直达底层）
   - 聊天指令与管理台双端实时联动，支持 /doc no 历史切断遗忘
-  - 数据持久化在 data/plugin_data/xbdoc
+  - 数据持久化在 data/plugin_data/astrbot_plugin_xbdoc
 version: 1.1.0
 author: Light
 repo: https://github.com/imsuperone/xbdoc
