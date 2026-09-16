@@ -275,17 +275,13 @@ class DocMemoryPlugin(Star):
         self._bindings: Dict[str, Dict[str, Any]] = self._normalize_bindings(
             self._load_json(self.bindings_path, {})
         )
+        self._chunk_cache: Dict[str, List[str]] = {}  # 内存缓存：doc_id -> chunks
 
         if _HAS_WEB_API:
             try:
                 self._register_web_apis()
             except Exception as e:
                 logger.warning(f"[{PLUGIN_NAME}] 注册 Web API 异常: {e}")
-
-        # 清理可能残留的 123.txt 显式文档记录（保持默认隐藏于工作区后台）
-        to_del = [did for did, m in self._index.items() if m.get("filename") == "123.txt"]
-        for did in to_del:
-            self._index.pop(did, None)
 
     # ---------- 路径与持久化 ----------
     def _resolve_data_dir(self) -> Path:
@@ -424,6 +420,7 @@ class DocMemoryPlugin(Star):
         (self.data_dir / f"chunks_{doc_id}.json").write_text(
             json.dumps(chunks, ensure_ascii=False), encoding="utf-8"
         )
+        self._chunk_cache[doc_id] = chunks  # 更新内存缓存
         self._save_json(self.index_path, self._index)
         logger.info(f"[{PLUGIN_NAME}] 入库文档 {filename} id={doc_id} chunks={len(chunks)} tavern={is_tavern}")
         return meta
@@ -437,6 +434,7 @@ class DocMemoryPlugin(Star):
                 p.unlink(missing_ok=True)
             except Exception:
                 pass
+        self._chunk_cache.pop(doc_id, None)  # 清除内存缓存
 
         # 同步清理所有绑定引用
         changed = False
@@ -453,12 +451,18 @@ class DocMemoryPlugin(Star):
         return sorted(self._index.values(), key=lambda m: m.get("updated_at", 0), reverse=True)
 
     def _load_chunks(self, doc_id: str) -> List[str]:
+        # 内存缓存命中
+        if doc_id in self._chunk_cache:
+            return self._chunk_cache[doc_id]
+
         cache = self.data_dir / f"chunks_{doc_id}.json"
         try:
             if cache.exists():
                 data = json.loads(cache.read_text(encoding="utf-8"))
                 if isinstance(data, list) and data:
-                    return [str(x) for x in data]
+                    result = [str(x) for x in data]
+                    self._chunk_cache[doc_id] = result
+                    return result
         except Exception:
             pass
 
@@ -474,6 +478,7 @@ class DocMemoryPlugin(Star):
                 text = extract_text_from_bytes(str(meta.get("suffix", "")), raw)
             chunks = chunk_text(text, self.chunk_size, self.chunk_overlap)
             cache.write_text(json.dumps(chunks, ensure_ascii=False), encoding="utf-8")
+            self._chunk_cache[doc_id] = chunks
             return chunks
         except Exception as e:
             logger.error(f"[{PLUGIN_NAME}] 重建切片失败 {doc_id}: {e}")
@@ -523,6 +528,7 @@ class DocMemoryPlugin(Star):
                 prompt = ""
                 shield = False
                 mode = "reference"
+                force_sys = False
             elif isinstance(v, dict):
                 doc_ids = [str(i) for i in (v.get("doc_ids") or [])]
                 prompt = str(v.get("prompt") or "").strip()
@@ -845,8 +851,6 @@ class DocMemoryPlugin(Star):
                 for did in doc_ids:
                     meta = self._index.get(did, {})
                     fname = meta.get("filename", did)
-                    if fname in ("123.txt", ".123.txt"):
-                        continue
                     chunks = self._load_chunks(did)
                     body = "\n".join(chunks)
                     if total_chars + len(body) <= self.max_inject_chars:
@@ -921,15 +925,15 @@ class DocMemoryPlugin(Star):
             if not inject:
                 return
 
-                # 写入 extra_user_content_parts 官方标准通道
-                parts = getattr(req, "extra_user_content_parts", None)
-                if parts is not None and _HAS_TEXT_PART and TextPart is not None:
-                    try:
-                        tp = TextPart(text=inject)
-                        if hasattr(tp, "mark_as_temp"): tp = tp.mark_as_temp()
-                        parts.append(tp)
-                    except Exception:
-                        pass
+            # 写入 extra_user_content_parts 官方标准通道
+            parts = getattr(req, "extra_user_content_parts", None)
+            if parts is not None and _HAS_TEXT_PART and TextPart is not None:
+                try:
+                    tp = TextPart(text=inject)
+                    if hasattr(tp, "mark_as_temp"): tp = tp.mark_as_temp()
+                    parts.append(tp)
+                except Exception:
+                    pass
 
             logger.info(f"[{PLUGIN_NAME}] [参考资料模式] 纯净载入文档记忆 (会话: {c_key})")
         except Exception as e:
@@ -1151,10 +1155,7 @@ class DocMemoryPlugin(Star):
         ent = self._get_entry(key)
         mode = str(ent.get("mode") or "reference")
 
-        # 123.txt 默认作为底层隐藏文件，不露出来
-        custom_ids = [d for d in ids if self._index.get(d, {}).get("filename") != "123.txt"]
-
-        if not custom_ids:
+        if not ids:
             yield event.plain_result(
                 f"💻 模拟工作区详情（{key}）\n\n"
                 f"• 当前模式：{'💻 模拟工作区模式 (生效中)' if mode == 'workspace' else '📖 普通模式'}\n"
@@ -1166,11 +1167,11 @@ class DocMemoryPlugin(Star):
         lines = [
             f"💻 模拟工作区详情（{key}）\n",
             f"• 当前模式：{'💻 模拟工作区模式 (生效中)' if mode == 'workspace' else '📖 普通模式 (发送 /doc mode workspace 切换为工作区)'}",
-            f"• 挂载文件数量：共 {len(custom_ids)} 篇文档\n",
+            f"• 挂载文件数量：共 {len(ids)} 篇文档\n",
             "📁 工作区根目录 [/workspace] 文件清单：",
         ]
         total_len = 0
-        for idx, did in enumerate(custom_ids, 1):
+        for idx, did in enumerate(ids, 1):
             meta = self._index.get(did, {})
             fname = meta.get("filename", did)
             tlen = meta.get("text_len", 0)
@@ -1662,11 +1663,8 @@ class DocMemoryPlugin(Star):
                 if any(k in lower for k in ("platform", "adapter", "bot", "client", "connection", "ws", "manager")):
                     try:
                         val = getattr(obj, attr, None)
-                        if callable(val) and not inspect.isclass(val):
-                            try:
-                                val = val()
-                            except Exception:
-                                pass
+                        if callable(val) or inspect.isclass(val):
+                            continue
                         if val is None:
                             continue
                         if isinstance(val, (list, tuple, set)):

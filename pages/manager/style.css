@@ -993,36 +993,6 @@ textarea.m3-field {
   color: var(--md-sys-color-outline) !important;
 }
 
-.badge-pill.mode-badge-system {
-  background: #fbcfe8 !important;
-  color: #9d174d !important;
-  font-weight: 700 !important;
-  border: 1px solid #f472b6;
-}
-
-[data-theme="dark"] .badge-pill.mode-badge-system {
-  background: #831843 !important;
-  color: #fbcfe8 !important;
-  border-color: #be185d;
-}
-
-.badge-pill.mode-badge-workspace {
-  background: #cffafe !important;
-  color: #0e7490 !important;
-  font-weight: 700 !important;
-  border: 1px solid #67e8f9;
-}
-
-[data-theme="dark"] .badge-pill.mode-badge-workspace {
-  background: #164e63 !important;
-  color: #cffafe !important;
-  border-color: #0891b2;
-}
-
-.badge-pill.mode-badge-ref {
-  background: var(--md-sys-color-surface-container-high) !important;
-  color: var(--md-sys-color-on-surface-variant) !important;
-}
 
 .doc-tag {
   font-size: 11px;

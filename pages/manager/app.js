@@ -987,7 +987,7 @@
           </div>
           <div class="binding-card-actions">
             <button class="m3-btn m3-btn-tonal m3-btn-sm" data-act="edit" data-key="${esc(k)}" type="button">载入编辑</button>
-            <button class="m3-btn m3-btn-danger m3-btn-sm" data-act="unbind" data-key="${esc(k)}" type="button">解绑文档</button>
+            <button class="m3-btn m3-btn-danger m3-btn-sm" data-act="unbind" data-key="${esc(k)}" type="button">解绑</button>
           </div>
         </div>
       `;
