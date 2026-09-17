@@ -1783,49 +1783,88 @@ class XbdocPlugin(Star):
         })
 
     def _find_all_bots(self) -> List[Any]:
-        """挖掘 context 中的 Bot / PlatformAdapter 实例（仅遍历已知属性，避免 dir 全掃卡顿）。"""
+        """定位平台适配器：优先走官方 platform_manager.platform_insts，其次事件缓存，最后有界泛遍历。"""
+        targets: List[Any] = []
+        added: set = set()
+
+        def _add(obj) -> None:
+            if obj is None or id(obj) in added:
+                return
+            if any(callable(getattr(obj, m, None)) for m in ("call_action", "call_api", "get_group_list")):
+                added.add(id(obj))
+                targets.append(obj)
+
+        # 1. 官方通道：Context.platform_manager.platform_insts / get_insts()
+        try:
+            pm = getattr(self.context, "platform_manager", None)
+            if pm is not None:
+                insts = list(getattr(pm, "platform_insts", None) or [])
+                if not insts:
+                    try:
+                        gi = getattr(pm, "get_insts", None)
+                        if callable(gi):
+                            insts = list(gi() or [])
+                    except Exception:
+                        pass
+                for inst in insts:
+                    _add(inst)
+        except Exception:
+            pass
+        if targets:
+            return targets
+
+        # 2. 消息事件里缓存的 bot（适配器实例）
+        try:
+            if getattr(self, "_latest_bot", None) is not None:
+                _add(self._latest_bot)
+        except Exception:
+            pass
+        if targets:
+            return targets
+
+        # 3. 兜底：有界泛遍历（保留 *manager 等关键字，并设访问上限防卡顿）
         import inspect
-        targets = []
-        visited = set()
-        _ATTRS = ("platforms", "adapters", "bots", "clients", "platform", "adapter", "bot", "client")
+        visited: set = set()
+        budget = [800]
 
         def _traverse(obj, depth=0):
-            if depth > 3 or obj is None:
+            if depth > 4 or obj is None or budget[0] <= 0:
                 return
             oid = id(obj)
             if oid in visited:
                 return
             visited.add(oid)
-
-            # 具备动作调用能力的适配器或 Bot
-            if any(callable(getattr(obj, m, None)) for m in ("call_action", "call_api", "get_group_list")):
-                if obj not in targets:
-                    targets.append(obj)
-                if depth >= 2:
-                    return
-
-            # 仅遍历已知容器属性
-            for attr in _ATTRS:
+            budget[0] -= 1
+            _add(obj)
+            try:
+                attrs = dir(obj)
+            except Exception:
+                return
+            for attr in attrs:
+                if attr.startswith("__"):
+                    continue
+                lower = attr.lower()
+                if not any(k in lower for k in ("platform", "adapter", "bot", "client", "connection", "ws", "manager", "inst")):
+                    continue
                 try:
-                    if not hasattr(obj, attr):
-                        continue
                     val = getattr(obj, attr, None)
-                    if val is None or callable(val) or inspect.isclass(val):
-                        continue
-                    if isinstance(val, (list, tuple, set)):
-                        for item in val:
-                            _traverse(item, depth + 1)
-                    elif isinstance(val, dict):
-                        for item in val.values():
-                            _traverse(item, depth + 1)
-                    else:
-                        _traverse(val, depth + 1)
                 except Exception:
-                    pass
+                    continue
+                if val is None or callable(val) or inspect.isclass(val):
+                    continue
+                if isinstance(val, (list, tuple, set)):
+                    for item in val:
+                        _traverse(item, depth + 1)
+                elif isinstance(val, dict):
+                    for item in val.values():
+                        _traverse(item, depth + 1)
+                else:
+                    _traverse(val, depth + 1)
 
-        if getattr(self, "_latest_bot", None) is not None:
-            _traverse(self._latest_bot, 0)
-        _traverse(self.context, 0)
+        try:
+            _traverse(self.context, 0)
+        except Exception:
+            pass
         return targets
 
     async def _fetch_platform_groups(self) -> List[Dict[str, Any]]:
