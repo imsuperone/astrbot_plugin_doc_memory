@@ -270,23 +270,14 @@
         <div style="display:flex; flex-direction:column; gap:16px;">
           <div class="binding-card" style="align-items:flex-start;">
             <div class="binding-card-meta">
-              <strong style="color:var(--md-sys-color-primary);">1. 群聊指令快捷管理（仅群管理员）</strong>
+              <strong style="color:var(--md-sys-color-primary);">1. 群聊指令（仅群管理员可改配置）</strong>
               <p style="margin-top:6px; color:var(--md-sys-color-on-surface); line-height:1.8;">
-                • <code class="mono">/doc</code>：查看清爽指令菜单。<br/>
-                • <code class="mono">/doc list</code>：查看知识库中全部入库文档及其 ID。<br/>
-                • <code class="mono">/doc status</code>：查看本群当前绑定与生效状态。<br/>
-                • <code class="mono">/doc bind &lt;文档ID&gt;</code>：将文档追加绑定到当前群（多次绑定自动合并）。<br/>
-                • <code class="mono">/doc unbind [文档ID]</code>：解绑文档；不带 ID 则清空本群全部绑定，提示词与屏蔽一并清除。<br/>
-                • <code class="mono">/doc mode workspace|system|reference</code>：切换生效模式（模拟工作区 / 强制遵守 / 仅作参考）。<br/>
-                • <code class="mono">/doc workspace</code>：查看当前模拟工作区挂载的文件与状态。<br/>
-                • <code class="mono">/doc force on|off</code>：切换强制注入系统提示词（清空其他提示词，专属提示词唯一生效）。<br/>
-                • <code class="mono">/doc shield on|off</code>：切换人格屏蔽（开启清空原人格，关闭保留原人格）。<br/>
-                • <code class="mono">/doc no [off]</code>：清空并忘掉此前所有历史消息（有也忘掉）。<br/>
-                • <code class="mono">/doc greeting</code>：查看已绑定酒馆角色卡的开场白问候语。<br/>
-                • <code class="mono">/doc search &lt;关键词&gt;</code>：检索当前群绑定的文档内容。<br/>
-                • <code class="mono">/doc read &lt;ID&gt; [片段号]</code>：预览文档指定切片内容。<br/>
-                • <code class="mono">/doc prompt_set &lt;内容&gt;</code>：设置当前群专属提示词。<br/>
-                • <code class="mono">/doc prompt_clear</code>：清空当前群专属提示词。
+                📖 查看：<code class="mono">/doc</code> 菜单 · <code class="mono">/doc status</code> 本群状态 · <code class="mono">/doc list</code> 文档列表<br/>
+                <code class="mono">/doc workspace</code> 工作区 · <code class="mono">/doc greeting</code> 开场白 · <code class="mono">/doc search &lt;词&gt;</code> 检索 · <code class="mono">/doc read &lt;ID&gt; [n]</code> 预览<br/>
+                🔗 绑定：<code class="mono">/doc bind &lt;ID...&gt;</code> 追加绑定 · <code class="mono">/doc unbind [ID...]</code> 解绑（留空全清，提示词一并清除）<br/>
+                🎛️ 模式：<code class="mono">/doc mode system|workspace|reference</code> · <code class="mono">/doc shield on|off</code> · <code class="mono">/doc force on|off</code><br/>
+                🏷️ 提示词：<code class="mono">/doc prompt</code> 查看 · <code class="mono">/doc prompt_set &lt;内容&gt;</code> 设置 · <code class="mono">/doc prompt_clear</code> 清除<br/>
+                🧹 历史：<code class="mono">/doc no [off]</code> 忘掉此前消息 / 恢复
               </p>
             </div>
           </div>

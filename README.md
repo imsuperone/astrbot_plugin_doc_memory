@@ -31,7 +31,9 @@
 2.  重启 AstrBot，插件自动加载（如需 PDF / DOCX 解析会自动安装 `requirements.txt` 依赖）。
 3.  聊天发送 `/doc` 查看菜单，WebUI 打开 `文档记忆助手` 页面传文档、绑群。
 
-## 🚀 聊天指令（`/doc` 群内管理，绑定 / 提示词类仅管理员）
+## 🚀 聊天指令（`/doc` 群内管理，标注管理员的仅管理员可用）
+
+### 📖 查看
 
 指令
 
@@ -39,51 +41,19 @@
 
 `/doc`
 
-完整指令菜单
-
-`/doc list`
-
-知识库全部文档（含 ID / 切片数）
+完整菜单
 
 `/doc status`
 
 本群绑定、模式、屏蔽、提示词状态
 
-`/doc bind <ID1> [ID2...]`
+`/doc list`
 
-追加绑定文档到本群（自动合并去重）
-
-`/doc unbind [ID...]`
-
-解绑指定文档；留空清空本群全部绑定（含提示词 / 屏蔽一并清除）
-
-`/doc mode system` / `workspace` / `reference`
-
-切换生效模式（强制遵守 / 工作区 / 参考资料）
+知识库全部文档（含 ID / 切片数）
 
 `/doc workspace`
 
 工作区挂载清单与容量
-
-`/doc force on` / `off`
-
-强制注入：专属提示词作为唯一系统词
-
-`/doc shield on` / `off`
-
-人格屏蔽：清空 / 保留 AstrBot 原人格
-
-`/doc prompt_set <内容>`
-
-设置本群专属提示词（4000 字内）
-
-`/doc prompt_clear`
-
-清除本群专属提示词
-
-`/doc prompt`
-
-查看本群提示词与配置详情
 
 `/doc search <关键词>`
 
@@ -96,6 +66,62 @@
 `/doc greeting`
 
 已绑定酒馆角色卡的开场白
+
+### 🔗 绑定（管理员）
+
+指令
+
+说明
+
+`/doc bind <ID1> [ID2...]`
+
+追加绑定文档到本群（自动合并去重）
+
+`/doc unbind [ID...]`
+
+解绑指定文档；留空清空本群全部绑定（含提示词 / 屏蔽一并清除）
+
+### 🎛️ 模式（管理员）
+
+指令
+
+说明
+
+`/doc mode system` / `workspace` / `reference`
+
+强制遵守 / 工作区 / 仅参考
+
+`/doc shield on` / `off`
+
+清空 / 保留 AstrBot 原人格
+
+`/doc force on` / `off`
+
+专属提示词作为唯一系统词
+
+### 🏷️ 提示词（管理员）
+
+指令
+
+说明
+
+`/doc prompt`
+
+查看本群提示词与配置详情
+
+`/doc prompt_set <内容>`
+
+设置本群专属提示词（4000 字内）
+
+`/doc prompt_clear`
+
+清除本群专属提示词
+
+### 🧹 历史（管理员）
+
+指令
+
+说明
 
 `/doc no [off]`
 
