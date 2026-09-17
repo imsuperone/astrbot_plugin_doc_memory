@@ -31,7 +31,7 @@
 - `/doc list`：查看知识库文档列表
 - `/doc status`：查看本群绑定状态与生效配置
 - `/doc bind <文档ID>`：绑定文档到本群（管理员）
-- `/doc unbind [文档ID]`：解绑文档，留空清空本群绑定（管理员）
+- `/doc unbind [文档ID]`：解绑文档，留空清空本群绑定（提示词与屏蔽一并清除）
 - `/doc mode workspace|system|reference`：切换生效模式（管理员）
 - `/doc workspace`：查看工作区挂载清单
 - `/doc force on|off`：切换强制注入系统提示词开关（管理员）

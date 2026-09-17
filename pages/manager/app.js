@@ -1065,14 +1065,13 @@
         }
       } else if (act === "unbind") {
         try {
-          const cur = bindingsMap[key] || {};
-          showToast(`正在解绑 ${key} 的文档…`);
+          showToast(`正在解绑 ${key} 的文档与相关配置…`);
           await api.post("bindings/save", {
             session_key: key,
             doc_ids: [],
-            prompt: cur.prompt || "",
-            shield: Boolean(cur.shield),
-            force_system_prompt: Boolean(cur.force_system_prompt),
+            prompt: "",
+            shield: false,
+            force_system_prompt: false,
             mode: "reference",
           });
           // 如果当前输入框恰好载入了该群，同步清空表单已勾选文档并禁用模式

@@ -1155,7 +1155,7 @@ class XbdocPlugin(Star):
             "• /doc status — 查看本群当前绑定与生效状态\n"
             "• /doc no [off] — 清空并忘掉此前所有消息，不再读取此指令之前的记录\n"
             "• /doc bind <文档ID> — 绑定文档到本群（管理员）\n"
-            "• /doc unbind [文档ID] — 解绑文档，留空清空（管理员）\n"
+            "• /doc unbind [文档ID] — 解绑文档，留空则清空本群全部绑定（含提示词/屏蔽一并清除）\n"
             "• /doc mode workspace|system|reference — 切换生效模式\n"
             "• /doc workspace — 查看当前模拟工作区挂载的文件与状态\n"
             "• /doc force on|off — 切换强制注入系统提示词（清空其他所有提示词）\n"
@@ -1337,17 +1337,19 @@ class XbdocPlugin(Star):
             yield event.plain_result(f"⚠️ 本群（{main_key}）当前未绑定任何文档。")
             return
         raw_tokens = [t for t in re.split(r"\s+", (event.message_str or "").strip()) if t][2:]
-        # 留空 = 清空全部（含历史重复 Key），并自动回落模式，避免空工作区残留
+        # 留空 = 清空全部（含历史重复 Key）：文档、提示词、屏蔽、强制注入一并清除，回到未配置状态
         if not doc_id and not raw_tokens:
             for k in targets:
                 ent = self._bindings.get(k) or {}
                 ent["doc_ids"] = []
-                if str(ent.get("mode") or "") in ("system", "workspace"):
-                    ent["mode"] = "reference"
+                ent["prompt"] = ""
+                ent["shield"] = False
+                ent["force_system_prompt"] = False
+                ent["mode"] = "reference"
             pruned = sum(1 for k in targets if self._prune_empty_entry(k))
             self._save_json(self.bindings_path, self._bindings)
-            tail = "空配置已彻底移除。" if pruned else "（专属提示词与屏蔽设置仍保留）"
-            yield event.plain_result(f"✅ 已清空本群（{main_key}）的所有文档绑定，模式已回落为参考资料。{tail}")
+            tail = "相关配置已彻底移除。" if pruned else "已回到默认配置。"
+            yield event.plain_result(f"✅ 已清空本群（{main_key}）的所有文档绑定，专属提示词、屏蔽与强制注入已一并清除。{tail}")
             return
         tokens = self._parse_doc_ids(doc_id, " ".join(raw_tokens))
         removed: List[str] = []
@@ -1360,13 +1362,15 @@ class XbdocPlugin(Star):
                     ent["doc_ids"] = [d for d in ent["doc_ids"] if d != t]
                     hit = True
             (removed if hit else not_found).append(t)
-        # 若解绑后已无文档，自动回落模式，与 WebUI 解绑保持一致
+        # 若解绑后已无文档，视为彻底解绑：提示词/屏蔽/强制一并清除，与清空解绑保持一致
         remaining = sum(len((self._bindings.get(k) or {}).get("doc_ids", [])) for k in targets)
         if remaining == 0:
             for k in targets:
                 ent = self._bindings.get(k) or {}
-                if str(ent.get("mode") or "") in ("system", "workspace"):
-                    ent["mode"] = "reference"
+                ent["prompt"] = ""
+                ent["shield"] = False
+                ent["force_system_prompt"] = False
+                ent["mode"] = "reference"
             for k in targets:
                 self._prune_empty_entry(k)
         self._save_json(self.bindings_path, self._bindings)
@@ -1375,7 +1379,10 @@ class XbdocPlugin(Star):
             msg += f"\n• 已移除：{', '.join(removed)}"
         if not_found:
             msg += f"\n• 未绑定/不存在：{', '.join(not_found)}"
-        msg += f"\n本群当前剩余：{remaining} 篇文档。"
+        if remaining == 0:
+            msg += "\n• 本群已无绑定文档，提示词与屏蔽已一并清除。"
+        else:
+            msg += f"\n本群当前剩余：{remaining} 篇文档。"
         yield event.plain_result(msg)
 
     async def doc_search(self, event: AstrMessageEvent, keyword: str = ""):
