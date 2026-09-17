@@ -4,7 +4,7 @@
 
 - **作者**：Light
 - **开源仓库**：https://github.com/imsuperone/xbdoc
-- **当前版本**：1.1.1
+- **当前版本**：1.1.2
 - **AstrBot 版本要求**：>=4.16
 
 ## 核心特性
@@ -30,7 +30,7 @@
 - `/doc`：查看完整指令菜单
 - `/doc list`：查看知识库文档列表
 - `/doc status`：查看本群绑定状态与生效配置
-- `/doc bind <文档ID>`：绑定文档到本群（管理员）
+- `/doc bind <文档ID>`：追加绑定文档到本群（多次绑定自动合并）
 - `/doc unbind [文档ID]`：解绑文档，留空清空本群绑定（提示词与屏蔽一并清除）
 - `/doc mode workspace|system|reference`：切换生效模式（管理员）
 - `/doc workspace`：查看工作区挂载清单

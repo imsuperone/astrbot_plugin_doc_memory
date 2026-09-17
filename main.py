@@ -1,7 +1,6 @@
 """文档记忆助手插件：零 Embedding 检索 + 按群会话绑定 + 群独立提示词 + 大模型自动引用"""
 
 import hashlib
-import io
 import json
 import re
 import time
@@ -41,195 +40,33 @@ except Exception:
     _HAS_TEXT_PART = False
     TextPart = None  # type: ignore
 
-# ======================================================================
-# 纯函数：分词、切片、检索计分与文本提取（含酒馆预设/角色卡解析）
-# ======================================================================
-
-_TOKEN_RE = re.compile(r"[A-Za-z0-9_]+|[\u4e00-\u9fff]", re.UNICODE)
-ALLOWED_SUFFIXES = {
-    ".md", ".markdown", ".txt", ".json", ".csv", ".log",
-    ".yaml", ".yml", ".toml", ".ini", ".cfg",
-    ".html", ".htm", ".pdf", ".docx", ".png",
-}
-
-
-def parse_tavern_card(data: bytes) -> Optional[dict]:
-    """解析酒馆 (SillyTavern) 角色卡或预设（支持 JSON 与 PNG 内嵌元数据卡）。"""
-    # 1. 尝试 JSON 格式角色卡 / 预设
-    try:
-        text = data.decode("utf-8", errors="ignore").strip()
-        if text.startswith("{") and text.endswith("}"):
-            obj = json.loads(text)
-            if isinstance(obj, dict):
-                # V2 / V3 规格或标准角色属性
-                if any(k in obj for k in ("spec", "data", "character_version", "first_mes", "scenario", "personality", "description")):
-                    return obj
-                # 兼容 SillyTavern 提示词预设 preset
-                if any(k in obj for k in ("system_prompt", "jailbreak", "impersonate_prompt", "context_prompt", "post_history_instructions")):
-                    return obj
-    except Exception:
-        pass
-
-    # 2. 尝试 PNG 图片（解析 tEXt / iTXt chunk 提取内嵌的 chara / ccv3）
-    if data.startswith(b"\x89PNG\r\n\x1a\n"):
-        import base64
-        import struct
-        offset = 8
-        length = len(data)
-        while offset + 8 <= length:
-            chunk_len = struct.unpack(">I", data[offset:offset+4])[0]
-            chunk_type = data[offset+4:offset+8]
-            chunk_data = data[offset+8:offset+8+chunk_len]
-            offset += 8 + chunk_len + 4  # 4 bytes CRC
-
-            if chunk_type in (b"tEXt", b"iTXt"):
-                try:
-                    if chunk_type == b"tEXt" and b"\x00" in chunk_data:
-                        keyword, content = chunk_data.split(b"\x00", 1)
-                        if keyword.lower() in (b"chara", b"ccv3"):
-                            raw_json = base64.b64decode(content).decode("utf-8")
-                            return json.loads(raw_json)
-                    elif chunk_type == b"iTXt" and b"\x00" in chunk_data:
-                        parts = chunk_data.split(b"\x00", 4)
-                        if len(parts) >= 2 and parts[0].lower() in (b"chara", b"ccv3"):
-                            content = parts[-1]
-                            raw_json = base64.b64decode(content).decode("utf-8")
-                            return json.loads(raw_json)
-                except Exception:
-                    pass
-    return None
-
-
-def format_tavern_to_markdown(card: dict) -> str:
-    """将酒馆角色卡/预设规范化为清晰易读的高优先级 Markdown 系统级人设文档。"""
-    d = card.get("data") if isinstance(card.get("data"), dict) else card
-    name = str(d.get("name") or card.get("name") or "未命名酒馆角色").strip()
-    desc = str(d.get("description") or card.get("description") or "").strip()
-    personality = str(d.get("personality") or card.get("personality") or "").strip()
-    scenario = str(d.get("scenario") or card.get("scenario") or "").strip()
-    first_mes = str(d.get("first_mes") or card.get("first_mes") or "").strip()
-    mes_example = str(d.get("mes_example") or card.get("mes_example") or "").strip()
-    system_prompt = str(d.get("system_prompt") or card.get("system_prompt") or "").strip()
-    post_history = str(d.get("post_history_instructions") or card.get("post_history_instructions") or "").strip()
-
-    sections = [f"# 酒馆角色与预设：{name}"]
-    if system_prompt:
-        sections.append(f"## 系统指令与行为准则 (System Prompt)\n{system_prompt}")
-    if desc:
-        sections.append(f"## 角色外貌与背景故事 (Description)\n{desc}")
-    if personality:
-        sections.append(f"## 性格特质与心理特征 (Personality)\n{personality}")
-    if scenario:
-        sections.append(f"## 场景环境与人际关系 (Scenario)\n{scenario}")
-    if first_mes:
-        sections.append(f"## 角色经典开场白 (Greeting / First Message)\n{first_mes}")
-    if mes_example:
-        sections.append(f"## 对话示例与语气风格 (Dialogue Examples)\n{mes_example}")
-    if post_history:
-        sections.append(f"## 核心设定强化准则 (Post-History Instructions)\n{post_history}")
-
-    return "\n\n".join(sections)
-
-
-def tokenize(text: str) -> List[str]:
-    """中英混合分词：英文按词、中文按单字，统一小写。"""
-    return [t.lower() for t in _TOKEN_RE.findall(text or "")]
-
-
-def chunk_text(text: str, chunk_size: int = 1500, overlap: int = 200) -> List[str]:
-    """段落优先滑动切片，保持上下文连贯与切片上限。"""
-    text = (text or "").strip()
-    if not text:
-        return []
-    chunk_size = max(200, int(chunk_size or 1500))
-    overlap = max(0, min(int(overlap or 0), chunk_size - 50))
-
-    paras = re.split(r"\n\s*\n|\n(?=#{1,6}\s)|\n", text)
-    chunks: List[str] = []
-    buf = ""
-
-    for p in (p.strip() for p in paras if p.strip()):
-        candidate = f"{buf}\n{p}".strip() if buf else p
-        if len(candidate) <= chunk_size:
-            buf = candidate
-        else:
-            if buf:
-                chunks.append(buf)
-                buf = (buf[-overlap:] + "\n" + p).strip() if overlap else p
-            while len(buf) > chunk_size:
-                chunks.append(buf[:chunk_size])
-                buf = buf[chunk_size - overlap:].strip() if overlap else buf[chunk_size:].strip()
-    if buf:
-        chunks.append(buf)
-    return [c for c in chunks if c.strip()]
-
-
-def score_chunk(query_tokens: List[str], chunk_tokens: List[str]) -> float:
-    """TF 加权与覆盖率综合计分。"""
-    if not query_tokens or not chunk_tokens:
-        return 0.0
-    return score_chunk_tf(query_tokens, Counter(chunk_tokens))
-
-
-def score_chunk_tf(query_tokens: List[str], tf: Counter) -> float:
-    """基于预计算词频计分，避免每次检索重复分词（性能优化）。"""
-    if not query_tokens or not tf:
-        return 0.0
-    score = 0.0
-    unique_q = set(query_tokens)
-    for t in unique_q:
-        c = tf.get(t, 0)
-        if c > 0:
-            w = 0.5 if len(t) == 1 and "一" <= t <= "鿿" else 1.0
-            score += w * (1.0 + 0.3 * (min(c, 5) - 1))
-    hits = sum(1 for t in unique_q if tf.get(t, 0) > 0)
-    score *= 1.0 + 0.2 * (hits / max(1, len(unique_q)))
-    return round(score, 4)
-
-
-def strip_html(raw: str) -> str:
-    """移除 HTML 标签及内嵌脚本。"""
-    text = re.sub(r"<(script|style).*?</\1>", " ", raw, flags=re.S | re.I)
-    text = re.sub(r"<[^>]+>", " ", text)
-    return re.sub(r"\n{3,}", "\n\n", re.sub(r"[ \t\xa0]+", " ", text)).strip()
-
-
-def extract_text_from_bytes(suffix: str, data: bytes) -> str:
-    """按文件后缀提取纯文本（内置酒馆 PNG/JSON 角色卡与预设解析）。"""
-    suffix = (suffix or "").lower()
-
-    # 优先检测酒馆角色卡 / 预设
-    if suffix in (".png", ".json", ".txt"):
-        t_card = parse_tavern_card(data)
-        if t_card:
-            return format_tavern_to_markdown(t_card)
-        if suffix == ".png":
-            raise RuntimeError("该 PNG 图片不含酒馆角色卡元数据 (tEXt/chara)，仅支持上传酒馆 PNG 角色卡或 JSON 预设文件。")
-
-    if suffix in (".md", ".markdown", ".txt", ".json", ".csv", ".log",
-                  ".yaml", ".yml", ".toml", ".ini", ".cfg"):
-        return data.decode("utf-8", errors="ignore")
-    if suffix in (".html", ".htm"):
-        return strip_html(data.decode("utf-8", errors="ignore"))
-    if suffix == ".pdf":
-        try:
-            from pypdf import PdfReader
-        except ImportError as e:
-            raise RuntimeError("缺少 pypdf 依赖，请 pip install pypdf 后重试。") from e
-        reader = PdfReader(io.BytesIO(data))
-        return "\n\n".join(p.extract_text().strip() for p in reader.pages if p.extract_text())
-    if suffix == ".docx":
-        try:
-            import docx
-        except ImportError as e:
-            raise RuntimeError("缺少 python-docx 依赖，请 pip install python-docx 后重试。") from e
-        doc = docx.Document(io.BytesIO(data))
-        return "\n".join(p.text.strip() for p in doc.paragraphs if p.text and p.text.strip())
-    # 其他兜底当文本解码
-    text = data.decode("utf-8", errors="ignore")
-    if not text.strip():
-        raise RuntimeError(f"不支持的文件类型 {suffix} 或内容无法解码")
-    return text
+# 子模块导入：优先包内相对导入，失败时回退到文件目录直载（兼容各类加载器）
+try:
+    from .xbdoc_retrieval import (
+        ALLOWED_SUFFIXES,
+        chunk_text,
+        extract_text_from_bytes,
+        format_tavern_to_markdown,
+        parse_tavern_card,
+        score_chunk_tf,
+        tokenize,
+    )
+    from .xbdoc_inject import apply_system_prompt, build_system_text, build_workspace_text
+except ImportError:
+    import sys as _sys
+    _plug_dir = str(Path(__file__).resolve().parent)
+    if _plug_dir not in _sys.path:
+        _sys.path.insert(0, _plug_dir)
+    from xbdoc_retrieval import (
+        ALLOWED_SUFFIXES,
+        chunk_text,
+        extract_text_from_bytes,
+        format_tavern_to_markdown,
+        parse_tavern_card,
+        score_chunk_tf,
+        tokenize,
+    )
+    from xbdoc_inject import apply_system_prompt, build_system_text, build_workspace_text
 
 
 # ======================================================================
@@ -836,41 +673,6 @@ class XbdocPlugin(Star):
             total += len(seg)
         return "\n\n".join(parts)
 
-    # ---------- LLM 注入小工具（精简三处重复的 system_prompt 改写） ----------
-    @staticmethod
-    def _set_system_prompt(req, text: str, replace: bool) -> None:
-        text = str(text or "")
-        if replace:
-            try:
-                req.system_prompt = text
-            except Exception:
-                pass
-            for attr in ("contexts", "messages"):
-                ctx = getattr(req, attr, None)
-                if isinstance(ctx, list):
-                    has_sys = False
-                    for m in ctx:
-                        r = m.get("role") if isinstance(m, dict) else getattr(m, "role", "")
-                        if r == "system":
-                            if isinstance(m, dict):
-                                m["content"] = text
-                            else:
-                                try:
-                                    setattr(m, "content", text)
-                                except Exception:
-                                    pass
-                            has_sys = True
-                    if not has_sys and text:
-                        ctx.insert(0, {"role": "system", "content": text})
-        else:
-            if not text:
-                return
-            try:
-                cur = str(getattr(req, "system_prompt", "") or "").strip()
-                req.system_prompt = f"{cur}\n\n{text}".strip() if cur else text
-            except Exception:
-                pass
-
     # ---------- LLM 钩子 ----------
     @filter.on_llm_request()
     async def _inject_docs(self, event: AstrMessageEvent, req):
@@ -919,34 +721,24 @@ class XbdocPlugin(Star):
             replace_all = bool(shield or force_sys)
             max_chars = self._cfg_int("max_inject_chars", self.max_inject_chars)
             if not has_bound and custom_prompt:
-                self._set_system_prompt(req, custom_prompt, replace=replace_all)
+                apply_system_prompt(req, custom_prompt, replace=replace_all)
                 logger.info(f"[{PLUGIN_NAME}] [专属系统词模式] 无文档，专属系统提示词独立生效 (会话: {c_key})")
                 return
 
             # 无文档且无提示词时的空载响应
             if not has_bound:
                 if shield:
-                    self._set_system_prompt(req, "", replace=True)
+                    apply_system_prompt(req, "", replace=True)
                 return
 
             # -------------------------------------------------------------
             # 模式 1：⚡ 强制遵守文档 (文档直接作为系统提示词，专属提示词作为额外附加提示词)
             # -------------------------------------------------------------
             if mode == "system" and has_bound:
-                doc_contents = []
-                for did in doc_ids:
-                    chunks = self._load_chunks(did)
-                    doc_contents.append("\n".join(chunks))
-                combined_docs = "\n\n".join(doc_contents)
-                if len(combined_docs) > max_chars:
-                    combined_docs = combined_docs[:max_chars] + "\n…(截断)"
-
-                if custom_prompt:
-                    system_prompt_final = f"{combined_docs}\n\n{custom_prompt}"
-                else:
-                    system_prompt_final = combined_docs
-
-                self._set_system_prompt(req, system_prompt_final, replace=replace_all)
+                doc_texts = ["\n".join(self._load_chunks(did)) for did in doc_ids]
+                apply_system_prompt(
+                    req, build_system_text(doc_texts, custom_prompt, max_chars), replace=replace_all
+                )
 
                 # 保持 req.prompt 纯净，绝不向用户发言拼入文档正文
                 logger.info(f"[{PLUGIN_NAME}] [强制遵守模式] 文档已作为系统提示词载入 (会话: {c_key})")
@@ -956,30 +748,13 @@ class XbdocPlugin(Star):
             # 模式 3：💻 模拟工作区模式 (需有绑定文档，否则回落到参考资料逻辑)
             # -------------------------------------------------------------
             if mode == "workspace" and has_bound:
-                file_sections = []
-                total_chars = 0
-
+                files = []
                 for did in doc_ids:
                     meta = self._index.get(did, {})
-                    fname = meta.get("filename", did)
-                    chunks = self._load_chunks(did)
-                    body = "\n".join(chunks)
-                    if total_chars + len(body) <= max_chars:
-                        file_sections.append(f"/workspace/{fname}:\n{body}")
-                        total_chars += len(body)
-                    else:
-                        remain = max(0, max_chars - total_chars)
-                        if remain > 200:
-                            file_sections.append(f"/workspace/{fname}:\n{body[:remain]}\n…(截断)")
-                            total_chars += remain
-
-                ws_content = "\n\n".join(file_sections)
-                if custom_prompt:
-                    ws_final = f"{ws_content}\n\n{custom_prompt}" if ws_content else custom_prompt
-                else:
-                    ws_final = ws_content
-
-                self._set_system_prompt(req, ws_final, replace=replace_all)
+                    files.append((meta.get("filename", did), "\n".join(self._load_chunks(did))))
+                apply_system_prompt(
+                    req, build_workspace_text(files, custom_prompt, max_chars), replace=replace_all
+                )
 
                 # 保持 req.prompt 纯净，绝不向用户发言拼入工作区文件
                 logger.info(f"[{PLUGIN_NAME}] [工作区模式] 纯净挂载工作区文件 (会话: {c_key})")
@@ -988,7 +763,7 @@ class XbdocPlugin(Star):
             # -------------------------------------------------------------
             # 模式 2：📖 仅作参考资料 (提示词按 shield/force 决定替换或追加，必生效一次)
             # -------------------------------------------------------------
-            self._set_system_prompt(req, custom_prompt, replace=replace_all)
+            apply_system_prompt(req, custom_prompt, replace=replace_all)
 
             if not has_bound:
                 return
@@ -1146,7 +921,7 @@ class XbdocPlugin(Star):
             "• /doc list — 查看知识库全部文档列表\n"
             "• /doc status — 查看本群当前绑定与生效状态\n"
             "• /doc no [off] — 清空并忘掉此前所有消息，不再读取此指令之前的记录\n"
-            "• /doc bind <文档ID> — 绑定文档到本群（管理员）\n"
+            "• /doc bind <文档ID> — 追加绑定文档到本群（多次绑定自动合并）\n"
             "• /doc unbind [文档ID] — 解绑文档，留空则清空本群全部绑定（含提示词/屏蔽一并清除）\n"
             "• /doc mode workspace|system|reference — 切换生效模式\n"
             "• /doc workspace — 查看当前模拟工作区挂载的文件与状态\n"
@@ -1290,7 +1065,7 @@ class XbdocPlugin(Star):
         yield event.plain_result("\n\n────────────────────────\n\n".join(greetings))
 
     async def doc_bind(self, event: AstrMessageEvent, doc_id: str = ""):
-        """绑定文档 /doc bind <id1> [id2...]（管理员）"""
+        """绑定文档 /doc bind <id1> [id2...]（追加到本群已有绑定，管理员）"""
         raw_tokens = [t for t in re.split(r"\s+", (event.message_str or "").strip()) if t][2:]
         ids = self._parse_doc_ids(doc_id, " ".join(raw_tokens))
         if not ids:
@@ -1304,7 +1079,10 @@ class XbdocPlugin(Star):
             yield event.plain_result(f"❌ 绑定失败：以下 ID 不存在于知识库中：\n{', '.join(bad)}\n\n💡 请发送 /doc list 查看可用 ID。")
             return
         key = self._canonical_key(event)
-        self.bind_docs(key, ids)
+        existed = [d for d in self._peek_entry(key).get("doc_ids", []) if d in self._index]
+        added = [i for i in ids if i not in existed]
+        dup = [i for i in ids if i in existed]
+        self.bind_docs(key, existed + added)
         ent = self._peek_entry(key)
         m = str(ent.get("mode") or "reference")
         mode_txt = "⚡ 强制遵守（系统提示词）" if m == "system" else ("💻 模拟工作区" if m == "workspace" else "📖 仅作参考资料")
@@ -1312,10 +1090,11 @@ class XbdocPlugin(Star):
         lines = [
             f"✅ 绑定成功！已关联到本群（{key}）：\n",
         ]
-        for idx, did in enumerate(ids, 1):
-            fname = self._index[did]["filename"]
-            lines.append(f"• {fname}（ID: {did}）")
-        lines.append(f"\n当前模式：{mode_txt}")
+        for did in added:
+            lines.append(f"• 新增：{self._index[did]['filename']}（ID: {did}）")
+        for did in dup:
+            lines.append(f"• 已在绑定中：{self._index[did]['filename']}（ID: {did}）")
+        lines.append(f"\n本群共绑定 {len(existed) + len(added)} 篇，当前模式：{mode_txt}")
         lines.append("💡 切换为强制遵守模式：/doc mode system")
         lines.append("💡 切换为参考资料模式：/doc mode reference")
         yield event.plain_result("\n".join(lines).strip())
