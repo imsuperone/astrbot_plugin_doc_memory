@@ -249,6 +249,8 @@
   let bindingsMap = {};
   let groupsCache = [];
   let selectedDocIds = new Set();
+  let loadedSessionKey = "";
+  let promptDirty = false;
   let currentReaderDoc = null;
   let currentReaderChunk = 1;
   let currentReaderTotal = 1;
@@ -700,6 +702,48 @@
       loadExistingSessionSettings(key);
     });
 
+    // 手填 Key 切走时：命中已知会话则载入，否则重置提示词/开关为默认，避免把上个群的配置存到新群
+    function findBindingKey(v) {
+      const s = (v || "").trim();
+      if (!s) return "";
+      if (bindingsMap[s]) return s;
+      if (/^\d{5,}$/.test(s) && bindingsMap["group:" + s]) return "group:" + s;
+      return "";
+    }
+
+    function resetSessionControls() {
+      const bp = $("bindPrompt");
+      if (bp) bp.value = "";
+      promptDirty = false;
+      setShieldChoice("off");
+      setForceChoice("off");
+      currentDocMode = "reference";
+      const group = $("docModeGroup");
+      if (group) {
+        group.querySelectorAll(".segmented-choice-btn").forEach((btn) => {
+          btn.classList.toggle("active", btn.dataset.val === "reference");
+        });
+      }
+    }
+
+    input.addEventListener("change", () => {
+      const v = input.value.trim();
+      if (!v || v === loadedSessionKey) return;
+      const hit = findBindingKey(v);
+      if (hit) {
+        input.value = hit;
+        loadExistingSessionSettings(hit);
+      } else {
+        loadedSessionKey = v;
+        resetSessionControls();
+      }
+    });
+
+    const promptEl = $("bindPrompt");
+    if (promptEl) {
+      promptEl.addEventListener("input", () => { promptDirty = true; });
+    }
+
     input.addEventListener("input", () => {
       clearTimeout(suggestTimer);
       const q = input.value.trim();
@@ -736,6 +780,8 @@
 
   function loadExistingSessionSettings(key) {
     const entry = bindingsMap[key];
+    loadedSessionKey = key || "";
+    promptDirty = false;
     if (!entry) return;
 
     selectedDocIds.clear();
@@ -838,6 +884,8 @@
         const bp = $("bindPrompt");
         if (sk) sk.value = "";
         if (bp) bp.value = "";
+        loadedSessionKey = "";
+        promptDirty = false;
         selectedDocIds.clear();
         renderDocChips();
         setShieldChoice("off");
@@ -865,7 +913,14 @@
 
         const ids = Array.from(selectedDocIds);
         const promptEl = $("bindPrompt");
-        const prompt = promptEl ? promptEl.value.trim() : "";
+        // 未动过提示词框时沿用该会话已有提示词，防止手填Key把别的群/旧值覆盖掉；
+        // 只有亲手改过才按框内值保存（含清空）。
+        let prompt;
+        if (promptDirty || !bindingsMap[key]) {
+          prompt = promptEl ? promptEl.value.trim() : "";
+        } else {
+          prompt = bindingsMap[key].prompt || "";
+        }
         const shield = currentShield === "on";
         const mode = currentDocMode || "reference";
         const forceSys = currentForcePrompt;
@@ -880,6 +935,8 @@
             force_system_prompt: forceSys,
           });
           showToast("✅ 会话绑定与配置已成功保存！");
+          loadedSessionKey = key;
+          promptDirty = false;
           await loadBindings();
           await searchGroups("");
         } catch (err) {
