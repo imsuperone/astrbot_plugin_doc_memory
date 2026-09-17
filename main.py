@@ -123,21 +123,33 @@ class XbdocPlugin(Star):
                 base = Path(get_astrbot_data_path()) / "plugin_data"
                 new_p = base / PLUGIN_NAME
                 if not new_p.exists():
-                    for legacy in OLD_PLUGIN_NAMES:
-                        old_p = base / legacy
-                        if old_p.exists():
+                    # 多个旧目录并存时选最近使用过的迁移，其余仅告警不碰
+                    legacy_dirs = [base / n for n in OLD_PLUGIN_NAMES if (base / n).exists()]
+
+                    def _mtime(p: Path) -> float:
+                        try:
+                            b = p / "bindings.json"
+                            return b.stat().st_mtime if b.exists() else p.stat().st_mtime
+                        except Exception:
+                            return 0.0
+
+                    legacy_dirs.sort(key=_mtime, reverse=True)
+                    for idx, old_p in enumerate(legacy_dirs):
+                        if idx > 0:
+                            logger.warning(f"[{PLUGIN_NAME}] 发现多余旧数据目录未迁移: {old_p}")
+                            continue
+                        try:
+                            import shutil
                             try:
-                                import shutil
-                                try:
-                                    # 首选移动：不占双份空间，且删新目录后不会再被复活
-                                    shutil.move(str(old_p), str(new_p))
-                                except Exception:
-                                    shutil.copytree(old_p, new_p)
-                                logger.info(f"[{PLUGIN_NAME}] 已从旧数据目录迁移: {old_p} -> {new_p}")
-                            except Exception as e:
-                                logger.warning(f"[{PLUGIN_NAME}] 数据迁移失败，将直接使用旧目录: {e}")
-                                return old_p
-                            break
+                                # 首选移动：不占双份空间，且删新目录后不会再被复活
+                                shutil.move(str(old_p), str(new_p))
+                            except Exception:
+                                shutil.copytree(old_p, new_p)
+                            logger.info(f"[{PLUGIN_NAME}] 已从旧数据目录迁移: {old_p} -> {new_p}")
+                        except Exception as e:
+                            logger.warning(f"[{PLUGIN_NAME}] 数据迁移失败，将直接使用旧目录: {e}")
+                            return old_p
+                        break
                 return new_p
             except Exception:
                 pass
@@ -160,6 +172,14 @@ class XbdocPlugin(Star):
                 return json.loads(path.read_text(encoding="utf-8"))
         except Exception as e:
             logger.warning(f"[{PLUGIN_NAME}] 读取 {path.name} 失败: {e}")
+            # 损坏文件先备份再丢弃，避免下次保存直接覆盖丢失现场
+            try:
+                if path.exists() and path.stat().st_size > 0:
+                    bak = path.with_name(f"{path.stem}.corrupt-{int(time.time())}.bak")
+                    bak.write_bytes(path.read_bytes())
+                    logger.warning(f"[{PLUGIN_NAME}] 已备份损坏文件: {bak.name}")
+            except Exception:
+                pass
         return default
 
     def _save_json(self, path: Path, data: Any) -> None:
@@ -253,6 +273,17 @@ class XbdocPlugin(Star):
         text_hash = hashlib.md5(text.encode("utf-8")).hexdigest()
         doc_id = hashlib.md5(f"{filename}:{len(data)}:{text_hash}".encode("utf-8")).hexdigest()[:10]
         stored_name = f"{doc_id}_{filename}"
+        # 同 ID 旧文件残留清理（如改名重传导致文件名变化）
+        old_meta = self._index.get(doc_id)
+        if old_meta:
+            old_stored = str(old_meta.get("stored_name", ""))
+            if old_stored and old_stored != stored_name:
+                try:
+                    old_p = self.docs_dir / old_stored
+                    if old_p.exists():
+                        old_p.unlink()
+                except Exception:
+                    pass
         (self.docs_dir / stored_name).write_bytes(data)
 
         chunks = chunk_text(text, self.chunk_size, self.chunk_overlap)
@@ -291,11 +322,14 @@ class XbdocPlugin(Star):
         self._chunk_cache.pop(doc_id, None)  # 清除内存缓存
         self._chunk_tokens_cache.pop(doc_id, None)
 
-        # 同步清理所有绑定引用
+        # 同步清理所有绑定引用；被清空的会话回落模式并尝试删除空条目
         changed = False
-        for ent in self._bindings.values():
+        for key, ent in list(self._bindings.items()):
             if doc_id in ent.get("doc_ids", []):
                 ent["doc_ids"] = [i for i in ent["doc_ids"] if i != doc_id]
+                if not ent["doc_ids"] and str(ent.get("mode") or "") in ("system", "workspace"):
+                    ent["mode"] = "reference"
+                self._prune_empty_entry(key)
                 changed = True
         self._save_json(self.index_path, self._index)
         if changed:
@@ -1064,7 +1098,7 @@ class XbdocPlugin(Star):
             return
         yield event.plain_result("\n\n────────────────────────\n\n".join(greetings))
 
-    async def doc_bind(self, event: AstrMessageEvent, doc_id: str = ""):
+    async def doc_bind(self, event: AstrMessageEvent, doc_id: str = "", *rest: str):
         """绑定文档 /doc bind <id1> [id2...]（追加到本群已有绑定，管理员）"""
         raw_tokens = [t for t in re.split(r"\s+", (event.message_str or "").strip()) if t][2:]
         ids = self._parse_doc_ids(doc_id, " ".join(raw_tokens))
@@ -1099,7 +1133,7 @@ class XbdocPlugin(Star):
         lines.append("💡 切换为参考资料模式：/doc mode reference")
         yield event.plain_result("\n".join(lines).strip())
 
-    async def doc_unbind(self, event: AstrMessageEvent, doc_id: str = ""):
+    async def doc_unbind(self, event: AstrMessageEvent, doc_id: str = "", *rest: str):
         """解绑文档 /doc unbind [id...]，留空则清空绑定（管理员）"""
         keys = self._find_matching_keys(event)
         main_key = keys[0]
@@ -1176,7 +1210,7 @@ class XbdocPlugin(Star):
             out.append(f"{h['text'][:400]}\n")
         yield event.plain_result("\n".join(out)[:3500].strip())
 
-    async def doc_read(self, event: AstrMessageEvent, doc_id: str = "", num: str = "1"):
+    async def doc_read(self, event: AstrMessageEvent, doc_id: str = "", num: str = "1", *rest: str):
         """预览文档切片 /doc read <id> [片段号]"""
         if not doc_id or doc_id not in self._index:
             yield event.plain_result("❌ 用法错误：/doc read <文档ID> [片段号]，ID 可用 /doc list 查看。")
@@ -1226,7 +1260,7 @@ class XbdocPlugin(Star):
             "• /doc prompt_clear"
         )
 
-    async def doc_mode(self, event: AstrMessageEvent, mode: str = ""):
+    async def doc_mode(self, event: AstrMessageEvent, mode: str = "", *rest: str):
         """设置本群文档生效模式 /doc mode workspace|system|reference（管理员）"""
         key = self._canonical_key(event)
         ent = self._peek_entry(key)
@@ -1291,7 +1325,7 @@ class XbdocPlugin(Star):
         self._save_json(self.bindings_path, self._bindings)
         yield event.plain_result(f"✅ 已清空本群（{key}）专属提示词。")
 
-    async def doc_shield(self, event: AstrMessageEvent, mode: str = ""):
+    async def doc_shield(self, event: AstrMessageEvent, mode: str = "", *rest: str):
         """本群屏蔽 AstrBot 原人格开关 /doc shield on|off（管理员）"""
         raw = (mode or re.sub(r"^/doc\s+shield\s*", "", event.message_str or "")).strip().lower()
         key = self._canonical_key(event)
