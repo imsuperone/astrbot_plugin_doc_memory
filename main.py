@@ -599,17 +599,21 @@ class XbdocPlugin(Star):
                 shield = False
                 mode = "reference"
                 force_sys = False
+                extra: Dict[str, Any] = {}
             elif isinstance(v, dict):
                 doc_ids = [str(i) for i in (v.get("doc_ids") or [])]
                 prompt = str(v.get("prompt") or "").strip()
                 shield = bool(v.get("shield", False))
                 force_sys = bool(v.get("force_system_prompt", False))
                 mode = self._normalize_mode(v.get("mode"))
+                # 保留未知字段（如 ignore_history / cutoff_timestamp），避免打开WebUI就丢配置
+                extra = {kk: vv for kk, vv in v.items() if kk not in (
+                    "doc_ids", "prompt", "shield", "mode", "force_system_prompt")}
             else:
                 continue
 
             if ck not in out:
-                out[ck] = {"doc_ids": doc_ids, "prompt": prompt, "shield": shield, "mode": mode, "force_system_prompt": force_sys}
+                out[ck] = {"doc_ids": doc_ids, "prompt": prompt, "shield": shield, "mode": mode, "force_system_prompt": force_sys, **extra}
             else:
                 cur = out[ck]
                 for did in doc_ids:
@@ -623,6 +627,8 @@ class XbdocPlugin(Star):
                     cur["force_system_prompt"] = True
                 if mode in ("system", "workspace"):
                     cur["mode"] = mode
+                for kk, vv in extra.items():
+                    cur.setdefault(kk, vv)
         return out
 
     def _session_keys(self, event: AstrMessageEvent) -> List[str]:
