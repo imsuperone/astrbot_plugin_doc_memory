@@ -4,7 +4,7 @@
 
 - **作者**：Light
 - **开源仓库**：https://github.com/imsuperone/xbdoc
-- **当前版本**：1.1.0
+- **当前版本**：1.1.1
 - **AstrBot 版本要求**：>=4.16
 
 ## 核心特性

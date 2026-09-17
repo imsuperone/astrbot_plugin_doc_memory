@@ -685,16 +685,8 @@ class XbdocPlugin(Star):
         return keys
 
     def get_bound_doc_ids(self, event: AstrMessageEvent) -> List[str]:
-        ck = self._canonical_key(event)
-        ent = self._bindings.get(ck) or {}
-        ids = [d for d in ent.get("doc_ids", []) if d in self._index]
-        if ids:
-            return ids
-        for k in self._session_keys(event):
-            for did in self._bindings.get(k, {}).get("doc_ids", []):
-                if did in self._index and did not in ids:
-                    ids.append(did)
-        return ids
+        # 与注入链路共用同一会话解析，避免状态显示与实际生效不一致
+        return list(self._effective_session(event).get("doc_ids", []))
 
     def _effective_session(self, event: AstrMessageEvent) -> Dict[str, Any]:
         """获取本会话综合生效配置（严格群唯一化）。"""
@@ -744,11 +736,9 @@ class XbdocPlugin(Star):
             return True
         return False
 
-    def set_session_prompt(self, session_key: str, prompt: str, enabled: Optional[bool] = None) -> Dict[str, Any]:
+    def set_session_prompt(self, session_key: str, prompt: str) -> Dict[str, Any]:
         ent = self._get_entry(session_key)
         ent["prompt"] = (prompt or "").strip()
-        if enabled in (True, False):
-            ent["prompt_enabled"] = bool(enabled)
         self._save_json(self.bindings_path, self._bindings)
         return ent
 
@@ -922,17 +912,16 @@ class XbdocPlugin(Star):
                         h_val.clear()
 
             # -------------------------------------------------------------
-            # 第一优先级通道：只有系统提示词模式 (无文档，或已开启 force_system_prompt)
+            # 提示词通道：shield 或 force 任一开启即替换原人格，否则追加。
+            # 有绑定文档时由各模式统一拼入提示词（仅一次），避免重复注入。
             # -------------------------------------------------------------
             force_sys = bool(sess.get("force_system_prompt", False))
+            replace_all = bool(shield or force_sys)
             max_chars = self._cfg_int("max_inject_chars", self.max_inject_chars)
-            if (not has_bound and custom_prompt) or (force_sys and custom_prompt):
-                target_prompt = custom_prompt
-                self._set_system_prompt(req, target_prompt, replace=bool(shield or force_sys))
-
-                if not has_bound:
-                    logger.info(f"[{PLUGIN_NAME}] [专属系统词模式] 无文档，专属系统提示词独立生效 (会话: {c_key})")
-                    return
+            if not has_bound and custom_prompt:
+                self._set_system_prompt(req, custom_prompt, replace=replace_all)
+                logger.info(f"[{PLUGIN_NAME}] [专属系统词模式] 无文档，专属系统提示词独立生效 (会话: {c_key})")
+                return
 
             # 无文档且无提示词时的空载响应
             if not has_bound:
@@ -957,7 +946,7 @@ class XbdocPlugin(Star):
                 else:
                     system_prompt_final = combined_docs
 
-                self._set_system_prompt(req, system_prompt_final, replace=shield)
+                self._set_system_prompt(req, system_prompt_final, replace=replace_all)
 
                 # 保持 req.prompt 纯净，绝不向用户发言拼入文档正文
                 logger.info(f"[{PLUGIN_NAME}] [强制遵守模式] 文档已作为系统提示词载入 (会话: {c_key})")
@@ -990,19 +979,16 @@ class XbdocPlugin(Star):
                 else:
                     ws_final = ws_content
 
-                self._set_system_prompt(req, ws_final, replace=shield)
+                self._set_system_prompt(req, ws_final, replace=replace_all)
 
                 # 保持 req.prompt 纯净，绝不向用户发言拼入工作区文件
                 logger.info(f"[{PLUGIN_NAME}] [工作区模式] 纯净挂载工作区文件 (会话: {c_key})")
                 return
 
             # -------------------------------------------------------------
-            # 模式 2：📖 仅作参考资料 (AI记忆库中有这些文档，纯净无额外提示词)
+            # 模式 2：📖 仅作参考资料 (提示词按 shield/force 决定替换或追加，必生效一次)
             # -------------------------------------------------------------
-            if shield:
-                self._set_system_prompt(req, custom_prompt if custom_prompt else "", replace=True)
-            else:
-                self._set_system_prompt(req, custom_prompt, replace=False)
+            self._set_system_prompt(req, custom_prompt, replace=replace_all)
 
             if not has_bound:
                 return
@@ -1506,7 +1492,7 @@ class XbdocPlugin(Star):
             yield event.plain_result("提示词超出 4000 字上限，请精简后重试。")
             return
         key = self._canonical_key(event)
-        self.set_session_prompt(key, text, enabled=True)
+        self.set_session_prompt(key, text)
         yield event.plain_result(
             f"✅【本群专属提示词已生效】\n"
             f"会话标识：{key}\n"
@@ -1530,8 +1516,7 @@ class XbdocPlugin(Star):
         """本群屏蔽 AstrBot 原人格开关 /doc shield on|off（管理员）"""
         raw = (mode or re.sub(r"^/doc\s+shield\s*", "", event.message_str or "")).strip().lower()
         key = self._canonical_key(event)
-        ent = self._get_entry(key)
-        cur_shield = bool(ent.get("shield", False))
+        cur_shield = bool(self._peek_entry(key).get("shield", False))
 
         if raw in ("on", "开", "1", "true"):
             target_shield = True
@@ -1555,8 +1540,7 @@ class XbdocPlugin(Star):
         """切换强制注入系统提示词开关 /doc force on|off（管理员）"""
         raw = " ".join(args).strip().lower()
         key = self._canonical_key(event)
-        ent = self._get_entry(key)
-        cur = bool(ent.get("force_system_prompt", False))
+        cur = bool(self._peek_entry(key).get("force_system_prompt", False))
 
         if raw in ("on", "开", "1", "true"):
             target = True
@@ -1568,6 +1552,7 @@ class XbdocPlugin(Star):
             yield event.plain_result("用法：/doc force on (开启强制注入) | off (关闭)")
             return
 
+        ent = self._get_entry(key)
         ent["force_system_prompt"] = target
         self._prune_empty_entry(key)
         self._save_json(self.bindings_path, self._bindings)
@@ -1580,14 +1565,16 @@ class XbdocPlugin(Star):
         """清空历史记忆并停止读取此指令之前的消息 /doc no [off]"""
         raw = " ".join(args).strip().lower()
         key = self._canonical_key(event)
-        ent = self._get_entry(key)
 
         if raw in ("off", "恢复", "false", "0", "no_off", "reset", "yes"):
-            ent["ignore_history"] = False
-            self._save_json(self.bindings_path, self._bindings)
+            ent = self._peek_entry(key)
+            if ent:
+                ent["ignore_history"] = False
+                self._save_json(self.bindings_path, self._bindings)
             yield event.plain_result(f"✅ 已恢复读取历史消息上下文（会话：{key}）。")
             return
 
+        ent = self._get_entry(key)
         ent["ignore_history"] = True
         ent["cutoff_timestamp"] = int(time.time())
         self._save_json(self.bindings_path, self._bindings)

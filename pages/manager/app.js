@@ -573,11 +573,6 @@
       `;
     }).join("");
 
-    const bindIdsInput = $("bindIds");
-    if (bindIdsInput) {
-      bindIdsInput.value = Array.from(selectedDocIds).join(",");
-    }
-
     const hasDocs = selectedDocIds.size > 0;
     const modeRow = $("docModeRow");
     const modeSub = $("docModeSub");
