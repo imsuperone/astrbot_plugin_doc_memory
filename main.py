@@ -620,8 +620,12 @@ class XbdocPlugin(Star):
         return ent
 
     def set_session_mode(self, session_key: str, mode: str) -> Dict[str, Any]:
-        # 允许预设模式（无文档也可设置，绑定后自动生效），与 WebUI 保持一致
+        # 文档生效模式必须有绑定文档才能切换，无文档时强制回落 reference
         ent = self._get_entry(session_key)
+        if not [d for d in ent.get("doc_ids", []) if d in self._index]:
+            ent["mode"] = "reference"
+            self._save_json(self.bindings_path, self._bindings)
+            return ent
         ent["mode"] = self._normalize_mode(mode)
         self._save_json(self.bindings_path, self._bindings)
         return ent
@@ -1259,9 +1263,15 @@ class XbdocPlugin(Star):
         )
 
     async def doc_mode(self, event: AstrMessageEvent, mode: str = "", *rest: str):
-        """设置本群文档生效模式 /doc mode workspace|system|reference（管理员）"""
+        """设置本群文档生效模式 /doc mode workspace|system|reference（管理员，需先绑定文档）"""
         key = self._canonical_key(event)
         ent = self._peek_entry(key)
+        if not [d for d in ent.get("doc_ids", []) if d in self._index]:
+            yield event.plain_result(
+                f"⚠️ 本群（{key}）当前未绑定任何文档，无法切换生效模式。\n\n"
+                "💡 请先使用 /doc bind <ID> 绑定文档后再切换。"
+            )
+            return
         raw = (mode or re.sub(r"^/doc\s+mode\s*", "", event.message_str or "")).strip().lower()
         norm = self._normalize_mode(raw) if raw else ""
         if norm == "workspace":
@@ -1569,6 +1579,9 @@ class XbdocPlugin(Star):
             ent["force_system_prompt"] = bool(payload.get("force_system_prompt"))
         if "mode" in payload:
             ent["mode"] = self._normalize_mode(payload.get("mode"))
+        if not valid:
+            # 未绑定任何文档时模式强制回落，与聊天指令保持一致
+            ent["mode"] = "reference"
 
         self._prune_empty_entry(key)
         self._save_json(self.bindings_path, self._bindings)

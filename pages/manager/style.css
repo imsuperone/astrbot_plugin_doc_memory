@@ -1003,6 +1003,55 @@ textarea.m3-field {
   font-weight: 500;
 }
 
+/* Guide command groups: boxed rows */
+.cmd-group {
+  margin-bottom: 14px;
+}
+
+.cmd-group:last-child {
+  margin-bottom: 0;
+}
+
+.cmd-group-title {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--md-sys-color-primary);
+  margin-bottom: 8px;
+}
+
+.cmd-row {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  padding: 8px 12px;
+  border: 1px solid var(--md-sys-color-surface-container-high);
+  border-radius: var(--md-shape-m);
+  background: var(--md-sys-color-surface-container-low);
+  margin-bottom: 6px;
+  font-size: 13px;
+  color: var(--md-sys-color-on-surface);
+}
+
+.cmd-row:last-child {
+  margin-bottom: 0;
+}
+
+code.mono {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  background: var(--md-sys-color-surface-container-highest);
+  border: 1px solid var(--md-sys-color-outline-variant);
+  padding: 2px 8px;
+  border-radius: 6px;
+  color: var(--md-sys-color-primary);
+}
+
+[data-theme="dark"] code.mono {
+  color: var(--md-sys-color-primary);
+}
+
 /* Android 16 Adaptive Modal Dialog (Desktop: Centered Floating Dialog; Mobile: Bottom Sheet) */
 .modal-overlay {
   position: fixed;

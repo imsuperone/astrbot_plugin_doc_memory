@@ -386,11 +386,16 @@
     const modeRow = $("docModeRow");
     const modeSub = $("docModeSub");
     if (modeRow) {
-      modeRow.classList.remove("disabled");
-      modeRow.querySelectorAll("button").forEach((b) => b.disabled = false);
-      if (modeSub) modeSub.textContent = hasDocs
-        ? "设置文档在会话中的角色定位与隔离级别"
-        : "当前未选择文档也可预设模式，绑定文档后自动生效";
+      if (hasDocs) {
+        modeRow.classList.remove("disabled");
+        modeRow.querySelectorAll("button").forEach((b) => b.disabled = false);
+        if (modeSub) modeSub.textContent = "设置文档在会话中的角色定位与隔离级别";
+      } else {
+        _applyDocMode("reference");
+        modeRow.classList.add("disabled");
+        modeRow.querySelectorAll("button").forEach((b) => b.disabled = true);
+        if (modeSub) modeSub.textContent = "请先在上方选择要绑定的文档";
+      }
     }
   }
 
@@ -606,7 +611,7 @@
     if (entry.mode === "system" || entry.mode === "workspace") {
       modeVal = entry.mode;
     }
-    setDocMode(modeVal);
+    _applyDocMode(modeVal);
   }
 
   // ---- Document Execution Mode Choice Buttons ----
@@ -622,6 +627,14 @@
   }
 
   function setDocMode(val) {
+    if (selectedDocIds.size === 0) {
+      showToast("请先选择要绑定的文档，再设置生效模式");
+      return;
+    }
+    _applyDocMode(val);
+  }
+
+  function _applyDocMode(val) {
     if (val === "system" || val === "workspace") {
       currentDocMode = val;
     } else {
@@ -694,7 +707,7 @@
         renderDocChips();
         setShieldChoice("off");
         setForceChoice("off");
-        setDocMode("reference");
+        _applyDocMode("reference");
         showToast("已清空表单输入");
       });
     }
@@ -726,7 +739,8 @@
           prompt = bindingsMap[key].prompt || "";
         }
         const shield = currentShield === "on";
-        const mode = currentDocMode || "reference";
+        // 未选文档时模式强制回落（后端同样会强制），避免存下无效模式
+        const mode = ids.length > 0 ? (currentDocMode || "reference") : "reference";
         const forceSys = currentForcePrompt;
 
         try {
