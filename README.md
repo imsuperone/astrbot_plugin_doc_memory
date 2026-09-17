@@ -1,43 +1,116 @@
-# 文档记忆助手 xbdoc（`astrbot_plugin_xbdoc`）
+# 文档记忆助手
 
-让 AI 读懂你的 md / txt / pdf / docx / png / json 文档与酒馆角色卡，并按群记住与执行。
+📚 AstrBot 零 Embedding 文档记忆插件，WebUI 上传 md / txt / pdf / docx / 酒馆角色卡，按群独立绑定，大模型对话自动引用。
 
-- **作者**：Light
-- **开源仓库**：https://github.com/imsuperone/xbdoc
-- **当前版本**：1.1.2
-- **AstrBot 版本要求**：>=4.16
+-   📦 项目主页：[https://github.com/imsuperone/xbdoc](https://github.com/imsuperone/xbdoc)
+-   🔌 插件 ID：`astrbot_plugin_xbdoc`
+-   📌 版本：`v1.1.2`，要求 AstrBot `>=4.16`
 
-## 核心特性
+---
 
-- **三大生效模式**：
-  - ⚡ **强制遵守模式 (`system`)**：文档直接作为系统提示词载入大模型。
-  - 💻 **模拟工作区模式 (`workspace`)**：挂载工作区沙箱，大模型严格基于工作区文件分析回答。
-  - 📖 **仅作参考资料模式 (`reference`)**：将文档存入记忆库，对话时按需检索相关片段引用。
-- **强制注入系统提示词**：一键清空其他所有提示词，将群专属提示词强制设为唯一 System Prompt。
-- **无文档时独立生效**：即使没有绑定任何文档，依然可以独立设置专属系统提示词与人格屏蔽。
-- **酒馆 (SillyTavern) 角色卡原生支持**：直接拖拽上传 `.png`（内嵌元数据）与 `.json` 角色卡/预设，可用 `/doc greeting` 查看开场白。
-- **历史强行遗忘与清空**：发送 `/doc no` 彻底遗忘此前所有聊天记录。
-- **Android 16 管理台**：大圆角药丸卡片设计，支持模式直选与深浅主题切换。
+## 🌟 核心特性
 
-## 安装
+-   ⚡ **三大生效模式**：`system` 强制遵守（文档直灌系统提示词） / `workspace` 模拟工作区（`/workspace/` 沙箱挂载） / `reference` 仅作参考资料（提问时按需检索）。
+-   🧠 **零 Embedding 检索**：无需向量模型，中英分词 + TF 加权 + 覆盖率计分，切片词频全缓存，Top-K 注入。
+-   🍷 **酒馆原生支持**：SillyTavern 角色卡 / 预设自动解析（PNG 内嵌 `chara/ccv3` 与 JSON），`/doc greeting` 直看开场白。
+-   👥 **按群彻底隔离**：会话 Key 归一（`group:` / `private:`），绑定、提示词、屏蔽、模式各群独立。
+-   🏷️ **群专属提示词**：无文档也可独立生效；`shield` 清空原人格、`force` 强制唯一系统词，三模式下恰好生效一次。
+-   🧹 **解绑即恢复出厂**：`/doc unbind` 留空清空文档、提示词、屏蔽、强制注入，空配置条目彻底删除。
+-   🧠 **历史强行遗忘**：`/doc no` 截断此前全部上下文，`off` 恢复。
+-   💻 **WebUI 管理台**：文档上传 / 预览 / 下载、群搜索（含适配器主动拉取）、绑定表单、模式直选、深浅主题。
+-   📦 **改名无痛迁移**：`astrbot_plugin_doc_memory` / `xbdoc` 旧数据目录自动移动迁移。
 
-把 `astrbot_plugin_xbdoc` 打包为 zip，在 AstrBot WebUI → **插件** → **安装插件** → **上传安装** 即可。
+---
 
-依赖说明：如需解析 PDF 或 DOCX，请安装 `requirements.txt` 中的可选依赖。纯文本、Markdown、JSON 与酒馆 PNG 角色卡无需额外依赖，开箱即用。
+## 🚀 安装
 
-## 常用指令
+1.  AstrBot 后台 → **插件** → **从链接安装**，填入：
+    
+    https://github.com/imsuperone/xbdoc.git
+    
+2.  重启 AstrBot，插件自动加载（如需 PDF / DOCX 解析会自动安装 `requirements.txt` 依赖）。
+3.  聊天发送 `/doc` 查看菜单，WebUI 打开 `文档记忆助手` 页面传文档、绑群。
 
-- `/doc`：查看完整指令菜单
-- `/doc list`：查看知识库文档列表
-- `/doc status`：查看本群绑定状态与生效配置
-- `/doc bind <文档ID>`：追加绑定文档到本群（多次绑定自动合并）
-- `/doc unbind [文档ID]`：解绑文档，留空清空本群绑定（提示词与屏蔽一并清除）
-- `/doc mode workspace|system|reference`：切换生效模式（管理员）
-- `/doc workspace`：查看工作区挂载清单
-- `/doc force on|off`：切换强制注入系统提示词开关（管理员）
-- `/doc shield on|off`：切换人格屏蔽开关（管理员）
-- `/doc no [off]`：彻底清空并遗忘此指令之前的历史消息
-- `/doc greeting`：查看绑定的酒馆角色开场白
-- `/doc search <关键词>`：检索当前群绑定的文档内容
-- `/doc prompt_set <内容>`：设置本群专属提示词（管理员）
-- `/doc prompt_clear`：清空本群专属提示词（管理员）
+## 🚀 聊天指令（`/doc` 群内管理，绑定 / 提示词类仅管理员）
+
+指令
+
+说明
+
+`/doc`
+
+完整指令菜单
+
+`/doc list`
+
+知识库全部文档（含 ID / 切片数）
+
+`/doc status`
+
+本群绑定、模式、屏蔽、提示词状态
+
+`/doc bind <ID1> [ID2...]`
+
+追加绑定文档到本群（自动合并去重）
+
+`/doc unbind [ID...]`
+
+解绑指定文档；留空清空本群全部绑定（含提示词 / 屏蔽一并清除）
+
+`/doc mode system` / `workspace` / `reference`
+
+切换生效模式（强制遵守 / 工作区 / 参考资料）
+
+`/doc workspace`
+
+工作区挂载清单与容量
+
+`/doc force on` / `off`
+
+强制注入：专属提示词作为唯一系统词
+
+`/doc shield on` / `off`
+
+人格屏蔽：清空 / 保留 AstrBot 原人格
+
+`/doc prompt_set <内容>`
+
+设置本群专属提示词（4000 字内）
+
+`/doc prompt_clear`
+
+清除本群专属提示词
+
+`/doc prompt`
+
+查看本群提示词与配置详情
+
+`/doc search <关键词>`
+
+检索本群绑定文档
+
+`/doc read <ID> [片段号]`
+
+预览文档指定切片
+
+`/doc greeting`
+
+已绑定酒馆角色卡的开场白
+
+`/doc no [off]`
+
+忘掉此前所有历史消息 / 恢复读取
+
+---
+
+## 📦 依赖
+
+-   `pypdf >= 4.3.0`、`python-docx >= 1.1.2`（仅 PDF / DOCX 需要，纯文本、Markdown、JSON、酒馆卡开箱即用）
+-   上传上限 50MB；切片长度 / 重叠 / Top-K / 注入上限均可在插件配置中调整
+
+## 🧾 备注
+
+-   私聊独立绑定受 `allow_private_bind` 控制（默认开启），WebUI 群列表仅展示群聊。
+-   关闭 `auto_inject` 后不再自动检索文档，但专属提示词与屏蔽依然生效。
+-   数据持久化在 `data/plugin_data/astrbot_plugin_xbdoc`（`index.json` / `bindings.json` / `seen_groups.json` / `docs/`）。
+-   卸载重装不会丢数据；要彻底清零请先停服再删除上述数据目录。
