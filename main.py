@@ -291,7 +291,11 @@ class XbdocPlugin(Star):
                         if old_p.exists():
                             try:
                                 import shutil
-                                shutil.copytree(old_p, new_p)
+                                try:
+                                    # 首选移动：不占双份空间，且删新目录后不会再被复活
+                                    shutil.move(str(old_p), str(new_p))
+                                except Exception:
+                                    shutil.copytree(old_p, new_p)
                                 logger.info(f"[{PLUGIN_NAME}] 已从旧数据目录迁移: {old_p} -> {new_p}")
                             except Exception as e:
                                 logger.warning(f"[{PLUGIN_NAME}] 数据迁移失败，将直接使用旧目录: {e}")
