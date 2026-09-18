@@ -69,12 +69,13 @@ class XbdocPlugin(XbdocStoreMixin, XbdocCommandsMixin, XbdocWebAPIMixin, Star):
         q_lower = clean_q.lower()
 
         # BM25 全局量：N/avg_len/idf 在绑定文档全量切片上一次算好，Counter 全走缓存；
-        # 按（绑定集合 + 各文档切片数）缓存，同 key 直接复用，入库/删文档必然改变 key
+        # 按（绑定集合 + 各文档切片数）做多槽缓存，多会话交替提问不再反复重算
         _key = tuple((d, len(self._get_chunk_counters(d))) for d in sorted(set(doc_ids)) if d in self._index)
-        _hit = getattr(self, "_bm25_cache", None) or {}
-        if _hit.get("key") == _key:
-            _n, _avg_len, _idf = _hit["n"], _hit["avg"], _hit["idf"]
-        else:
+        _cache = getattr(self, "_bm25_cache", None)
+        if not isinstance(_cache, dict):
+            _cache = self._bm25_cache = {}
+        _hit = _cache.get(_key)
+        if _hit is None:
             _all_counters: List[Counter] = []
             for d, _ in _key:
                 _all_counters.extend(self._get_chunk_counters(d))
@@ -84,8 +85,17 @@ class XbdocPlugin(XbdocStoreMixin, XbdocCommandsMixin, XbdocWebAPIMixin, Star):
             for _c in _all_counters:
                 for _t in _c.keys():
                     _df[_t] += 1
-            _idf = {t: math.log((_n - f + 0.5) / (f + 0.5) + 1.0) for t, f in _df.items()}
-            self._bm25_cache = {"key": _key, "n": _n, "avg": _avg_len, "idf": _idf}
+            _hit = {
+                "n": _n, "avg": _avg_len,
+                "idf": {t: math.log((_n - f + 0.5) / (f + 0.5) + 1.0) for t, f in _df.items()},
+            }
+            if len(_cache) >= 8:
+                try:
+                    _cache.pop(next(iter(_cache)))
+                except Exception:
+                    pass
+            _cache[_key] = _hit
+        _n, _avg_len, _idf = _hit["n"], _hit["avg"], _hit["idf"]
 
         for did in doc_ids:
             meta = self._index.get(did)
@@ -384,9 +394,6 @@ class XbdocPlugin(XbdocStoreMixin, XbdocCommandsMixin, XbdocWebAPIMixin, Star):
                 yield res
         elif sub == "force":
             async for res in self.doc_force(event, *sub_args):
-                yield res
-        elif sub in ("greeting", "greet", "intro", "开场白", "问候"):
-            async for res in self.doc_greeting(event):
                 yield res
         elif sub == "search":
             kw = " ".join(sub_args)

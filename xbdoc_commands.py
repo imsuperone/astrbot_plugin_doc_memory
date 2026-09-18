@@ -28,7 +28,7 @@ class XbdocCommandsMixin:
             "📚 文档记忆助手 · 指令菜单\n\n"
             "📖 查看\n"
             "• /doc status — 本群状态；/doc list — 文档列表\n"
-            "• /doc workspace — 工作区挂载；/doc greeting — 角色开场白\n"
+            "• /doc workspace — 工作区挂载清单\n"
             "• /doc search <词> — 检索绑定文档；/doc read <ID> [n] — 预览切片\n\n"
             "🔗 绑定（管理员）\n"
             "• /doc bind <ID...> — 追加绑定，自动合并\n"
@@ -109,9 +109,6 @@ class XbdocCommandsMixin:
                 lines.append("⚡ 说明：大模型已将文档作为最高系统设定执行，强制遵守文档规则与设定。")
             else:
                 lines.append("📖 说明：群内提问相关内容时，AI 将检索片段作为参考资料引用回答。")
-            has_tavern = any(self._index.get(d, {}).get("is_tavern") for d in ids)
-            if has_tavern:
-                lines.append("🍷 提示：当前包含酒馆角色卡，可发送 /doc greeting 查看角色开场白。")
             lines.append("\n💡 切换模式：/doc mode workspace / system / reference")
             lines.append("💡 查看工作区：/doc workspace")
             lines.append("💡 切换屏蔽：/doc shield on / off")
@@ -154,25 +151,6 @@ class XbdocCommandsMixin:
         if mode != "workspace":
             lines.append("\n💡 发送 /doc mode workspace 可切换为工作区模式。")
         yield event.plain_result("\n".join(lines).strip())
-
-
-    async def doc_greeting(self, event: AstrMessageEvent):
-        """查看已绑定酒馆角色卡的开场白 /doc greeting"""
-        ids = self.get_bound_doc_ids(event)
-        if not ids:
-            yield event.plain_result("⚠️ 本群当前未绑定任何文档或酒馆角色卡。")
-            return
-        greetings = []
-        for did in ids:
-            meta = self._index.get(did, {})
-            g = str(meta.get("greeting") or "").strip()
-            if g:
-                fname = meta.get("filename", did)
-                greetings.append(f"🍷《{fname}》角色开场白：\n\n{g}")
-        if not greetings:
-            yield event.plain_result("💡 本群当前绑定的文档未包含酒馆角色开场白数据（first_mes）。")
-            return
-        yield event.plain_result("\n\n────────────────────────\n\n".join(greetings))
 
 
     async def doc_bind(self, event: AstrMessageEvent, doc_id: str = "", *rest: str):

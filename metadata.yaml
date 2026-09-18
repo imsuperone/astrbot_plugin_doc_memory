@@ -1,17 +1,16 @@
 name: astrbot_plugin_xbdoc
 display_name: 文档记忆助手
-short_desc: WebUI上传文档/酒馆卡，按群绑定，大模型对话自动引用。
+short_desc: WebUI上传文档，按群/私聊绑定，大模型对话自动引用。
 desc: |
-  让 AI 读懂你的 md/txt/pdf/docx/png/json 文档与酒馆角色卡，并持久化记住。
+  让 AI 读懂你的 md/txt/pdf/docx/json 文档，并持久化记住。
 
   核心能力：
-  - 支持酒馆 (SillyTavern) 角色卡与预设导入（PNG/JSON 自动解析）
   - WebUI 上传 / 删除 / 预览文档，按群会话隔离绑定
   - 三大生效模式：强制遵守模式、模拟工作区模式、仅作参考资料模式
   - 支持强制注入系统提示词（清空其他提示词，专属提示词直达底层）
   - 聊天指令与管理台双端实时联动，支持 /doc no 历史切断遗忘
   - 数据持久化在 data/plugin_data/astrbot_plugin_xbdoc
-version: 1.0.12
+version: 1.0.13
 author: Light
 repo: https://github.com/imsuperone/xbdoc
 astrbot_version: ">=4.16"

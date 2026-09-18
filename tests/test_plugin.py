@@ -147,6 +147,11 @@ def test_doc_retrieve_fulltext():
     assert hits and hits[0]["doc_id"] == did
     t1 = p._get_full_text(did)
     assert p._get_full_text(did) is t1 and "apple" in t1
+    # 多槽 BM25 缓存：不同绑定集合交替查询各占一槽，不互相驱逐
+    meta2 = p.add_document("banana.md", "banana banana banana".encode("utf-8"))
+    p.retrieve("banana", [meta2["doc_id"]])
+    p.retrieve("apple", [did])
+    assert len(p._bm25_cache) == 2, p._bm25_cache.keys()
 
 
 def test_resolve_session():

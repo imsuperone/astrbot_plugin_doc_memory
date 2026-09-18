@@ -67,6 +67,9 @@ class XbdocWebAPIMixin:
                 if "," in b64:
                     b64 = b64.split(",", 1)[1]
                 if b64:
+                    # base64 膨胀约 1/3：先卡字符串体积，避免超大包解码时吃爆内存（50MB 源文件约 68MB）
+                    if len(b64) > 70 * 1024 * 1024:
+                        return error_response("文件过大（解码后超出 50MB 上限）", status_code=400)
                     data = base64.b64decode(b64)
                     filename = str(payload.get("filename") or "unnamed").strip()
         except Exception:
@@ -93,12 +96,15 @@ class XbdocWebAPIMixin:
                     pass
 
             if upload is not None:
-                filename = getattr(upload, "filename", None) or getattr(upload, "name", None) or "unnamed"
-                val = upload.read() if hasattr(upload, "read") else bytes(upload)
-                if asyncio.iscoroutine(val):
-                    data = await val
-                else:
-                    data = bytes(val) if val is not None else b""
+                try:
+                    filename = getattr(upload, "filename", None) or getattr(upload, "name", None) or "unnamed"
+                    val = upload.read() if hasattr(upload, "read") else bytes(upload)
+                    if asyncio.iscoroutine(val):
+                        data = await val
+                    else:
+                        data = bytes(val) if val is not None else b""
+                except Exception:
+                    data = b""
 
         if not data:
             return error_response("未读取到上传文件内容，请重试", status_code=400)

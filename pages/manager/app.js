@@ -180,13 +180,9 @@
 
     container.innerHTML = list.map((doc) => {
       const suffix = (doc.suffix || "").replace(".", "").toLowerCase();
-      const isTavern = Boolean(doc.is_tavern || String(doc.filename || "").includes("酒馆"));
       let typeClass = "txt";
       let typeLabel = (suffix || "TXT").toUpperCase();
-      if (isTavern) {
-        typeClass = "tavern";
-        typeLabel = "🍷 酒馆";
-      } else if (suffix === "md" || suffix === "markdown") {
+      if (suffix === "md" || suffix === "markdown") {
         typeClass = "md";
       } else if (suffix === "pdf") {
         typeClass = "pdf";
@@ -201,7 +197,6 @@
             <div class="doc-card-info">
               <div class="doc-card-title" title="${esc(doc.filename)}">${esc(doc.filename)}</div>
               <div class="doc-card-badges">
-                ${isTavern ? '<span class="badge-pill" style="background:#fce7f3; color:#9d174d; font-weight:700;">🍷 酒馆角色卡</span>' : ''}
                 <span class="badge-pill id-badge">ID: ${esc(doc.doc_id)}</span>
                 <span class="badge-pill">${esc(doc.chunks)} 切片</span>
                 <span class="badge-pill">${esc(doc.text_len)} 字</span>

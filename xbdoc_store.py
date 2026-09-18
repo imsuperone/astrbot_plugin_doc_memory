@@ -27,8 +27,6 @@ try:
         ALLOWED_SUFFIXES,
         chunk_text,
         extract_text_from_bytes,
-        format_tavern_to_markdown,
-        parse_tavern_card,
         tokenize,
     )
 except ImportError:
@@ -36,8 +34,6 @@ except ImportError:
         ALLOWED_SUFFIXES,
         chunk_text,
         extract_text_from_bytes,
-        format_tavern_to_markdown,
-        parse_tavern_card,
         tokenize,
     )
 
@@ -294,7 +290,9 @@ class XbdocStoreMixin:
     @staticmethod
     def _safe_filename(name: str) -> str:
         name = (name or "unnamed").strip().replace("\\", "_").replace("/", "_")
-        return re.sub(r'[<>:"|?*\x00-\x1f]', "_", name)[:120] or "unnamed"
+        name = re.sub(r'[<>:"|?*\x00-\x1f]', "_", name) or "unnamed"
+        # ext4 等按字节限长（255B）：中文占 3 字节，超限会写盘崩溃
+        return name.encode("utf-8")[:200].decode("utf-8", errors="ignore") or "unnamed"
 
 
     def add_document(self, filename: str, data: bytes) -> Dict[str, Any]:
@@ -307,24 +305,7 @@ class XbdocStoreMixin:
         if len(data) > 50 * 1024 * 1024:
             raise RuntimeError("文件超出 50MB 上限，请拆分后上传")
 
-        # 智能检测酒馆角色卡 / 预设 (PNG / JSON)
-        is_tavern = False
-        chara_greeting = ""
-        t_card = parse_tavern_card(data)
-        if t_card:
-            is_tavern = True
-            d = t_card.get("data") if isinstance(t_card.get("data"), dict) else t_card
-            chara_name = str(d.get("name") or t_card.get("name") or "").strip()
-            chara_greeting = str(d.get("first_mes") or t_card.get("first_mes") or "").strip()
-            if chara_name and chara_name not in ("未命名角色", "未命名酒馆角色"):
-                filename = f"【酒馆】{self._safe_filename(chara_name)}.md"
-            else:
-                stem = Path(filename).stem
-                filename = f"【酒馆】{self._safe_filename(stem)}.md"
-            text = format_tavern_to_markdown(t_card).strip()
-            suffix = ".md"
-        else:
-            text = extract_text_from_bytes(suffix, data).strip()
+        text = extract_text_from_bytes(suffix, data).strip()
 
         if len(text) < 2:
             raise RuntimeError("提取纯文本内容过少，拒绝入库")
@@ -355,8 +336,6 @@ class XbdocStoreMixin:
             "text_len": len(text),
             "chunks": len(chunks),
             "updated_at": int(time.time()),
-            "is_tavern": is_tavern,
-            "greeting": chara_greeting,
         }
         self._index[doc_id] = meta
         self._save_bytes_atomic(
@@ -367,7 +346,7 @@ class XbdocStoreMixin:
         self._chunk_tokens_cache.pop(doc_id, None)  # 词频缓存失效，下次检索重建
         self._fulltext_cache.pop(doc_id, None)  # 全文缓存失效
         self._save_json(self.index_path, self._index)
-        logger.info(f"[{PLUGIN_NAME}] 入库文档 {filename} id={doc_id} chunks={len(chunks)} tavern={is_tavern}")
+        logger.info(f"[{PLUGIN_NAME}] 入库文档 {filename} id={doc_id} chunks={len(chunks)}")
         return meta
 
 
@@ -429,11 +408,10 @@ class XbdocStoreMixin:
             return []
         try:
             raw = (self.docs_dir / str(meta["stored_name"])).read_bytes()
-            if meta.get("is_tavern"):
-                card = parse_tavern_card(raw)
-                text = format_tavern_to_markdown(card) if card else raw.decode("utf-8", errors="ignore")
-            else:
-                text = extract_text_from_bytes(str(meta.get("suffix", "")), raw)
+            if meta.get("is_tavern") and raw.startswith(b"\x89PNG"):
+                # 旧酒馆 PNG 文档：解析器已移除，不再从原文件重建（已缓存切片不受影响）
+                return []
+            text = extract_text_from_bytes(str(meta.get("suffix", "")), raw)
             chunks = chunk_text(text, self._cfg_int("chunk_size"), self._cfg_int("chunk_overlap"))
             self._save_bytes_atomic(cache, json.dumps(chunks, ensure_ascii=False).encode("utf-8"))
             self._remember_chunks(doc_id, chunks)
@@ -566,7 +544,7 @@ class XbdocStoreMixin:
                 shield = bool(v.get("shield", False))
                 force_sys = bool(v.get("force_system_prompt", False))
                 mode = self._normalize_mode(v.get("mode"))
-                # 保留未知字段（如 ignore_history / cutoff_timestamp），避免打开WebUI就丢配置
+                # 保留未知字段（如 ignore_history），避免打开WebUI就丢配置
                 extra = {kk: vv for kk, vv in v.items() if kk not in (
                     "doc_ids", "prompt", "shield", "mode", "force_system_prompt")}
             else:

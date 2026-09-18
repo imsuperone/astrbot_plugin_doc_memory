@@ -61,6 +61,8 @@ def build_system_text(doc_texts: List[str], custom_prompt: str, max_chars: int) 
     """强制遵守模式：文档全文拼接（截断只截文档）+ 专属提示词（永不截断）。"""
     combined = truncate_text("\n\n".join(t for t in doc_texts if t), max_chars)
     custom_prompt = (custom_prompt or "").strip()
+    if not combined:
+        return custom_prompt
     return f"{combined}\n\n{custom_prompt}" if custom_prompt else combined
 
 

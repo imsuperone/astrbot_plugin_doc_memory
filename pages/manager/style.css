@@ -522,8 +522,6 @@ body {
 .doc-type-icon.pdf { background: var(--tag-pdf-bg); color: var(--tag-pdf); }
 .doc-type-icon.docx { background: var(--tag-doc-bg); color: var(--tag-doc); }
 .doc-type-icon.txt { background: var(--tag-txt-bg); color: var(--tag-txt); }
-.doc-type-icon.tavern { background: #fce7f3; color: #9d174d; }
-[data-theme="dark"] .doc-type-icon.tavern { background: #831843; color: #fbcfe8; }
 
 .doc-card-info {
   flex: 1;

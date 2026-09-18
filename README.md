@@ -1,10 +1,10 @@
 # 文档记忆助手
 
-📚 AstrBot 零 Embedding 文档记忆插件，WebUI 上传 md / txt / pdf / docx / 酒馆角色卡，按群独立绑定，大模型对话自动引用。
+📚 AstrBot 零 Embedding 文档记忆插件，WebUI 上传 md / txt / pdf / docx / json 文档，按群/私聊独立绑定，大模型对话自动引用。
 
 -   📦 项目主页：[https://github.com/imsuperone/xbdoc](https://github.com/imsuperone/xbdoc)
 -   🔌 插件 ID：`astrbot_plugin_xbdoc`
--   📌 版本：`v1.0.12`，要求 AstrBot `>=4.16`
+-   📌 版本：`v1.0.13`，要求 AstrBot `>=4.16`
 
 ---
 
@@ -12,7 +12,6 @@
 
 -   ⚡ **三大生效模式**：`system` 强制遵守（文档直灌系统提示词） / `workspace` 模拟工作区（`/workspace/` 沙箱挂载） / `reference` 仅作参考资料（提问时按需检索）。
 -   🧠 **零 Embedding 检索**：无需向量模型，中英分词 + BM25（idf + 长度归一），切片词频全缓存，Top-K 注入。
--   🍷 **酒馆原生支持**：SillyTavern 角色卡 / 预设自动解析（PNG 内嵌 `chara/ccv3` 与 JSON），`/doc greeting` 直看开场白。
 -   👥 **按群彻底隔离**：会话 Key 归一（`group:` / `private:`），绑定、提示词、屏蔽、模式各群独立。
 -   🏷️ **群专属提示词**：无文档也可独立生效；`shield` 清空原人格、`force` 强制唯一系统词，三模式下恰好生效一次。
 -   🧹 **解绑即恢复出厂**：`/doc unbind` 留空清空文档、提示词、屏蔽、强制注入，空配置条目彻底删除。
@@ -44,7 +43,6 @@
 | `/doc workspace` | 工作区挂载清单 |
 | `/doc search <词>` | 检索绑定文档 |
 | `/doc read <ID> [n]` | 预览文档切片 |
-| `/doc greeting` | 酒馆角色开场白 |
 
 </details>
 
@@ -93,12 +91,12 @@
 
 ## 📦 依赖
 
--   `pypdf >= 4.3.0`、`python-docx >= 1.1.2`（仅 PDF / DOCX 需要，纯文本、Markdown、JSON、酒馆卡开箱即用）
+-   `pypdf >= 4.3.0`、`python-docx >= 1.1.2`（仅 PDF / DOCX 需要，纯文本、Markdown、JSON 开箱即用）
 -   上传上限 50MB；切片长度 / 重叠 / Top-K / 注入上限均可在插件配置中调整
 
 ## 🧾 备注
 
--   私聊独立绑定受 `allow_private_bind` 控制（默认开启），WebUI 群列表仅展示群聊。
+-   私聊独立绑定受 `allow_private_bind` 控制（默认开启），和机器人私聊一句后即可在 WebUI 搜到并绑定。
 -   关闭 `auto_inject` 后不再自动检索文档，但专属提示词与屏蔽依然生效。
 -   数据持久化在 `data/plugin_data/astrbot_plugin_xbdoc`（`index.json` / `bindings.json` / `seen_groups.json` / `docs/`）。
 -   卸载重装不会丢数据；要彻底清零请先停服再删除上述数据目录。

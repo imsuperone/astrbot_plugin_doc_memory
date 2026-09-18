@@ -1,104 +1,24 @@
-"""xbdoc 纯函数：分词、切片、检索计分与文本提取（含酒馆预设/角色卡解析）。
+"""xbdoc 纯函数：分词、切片、检索计分与文本提取。
 
 无 AstrBot 依赖，可独立测试。
 """
 
 import io
-import json
-import math
 import re
 from collections import Counter
-from typing import List, Optional
+from typing import List
 
 
 # ======================================================================
-# 纯函数：分词、切片、检索计分与文本提取（含酒馆预设/角色卡解析）
+# 纯函数：分词、切片、检索计分与文本提取
 # ======================================================================
 
 _TOKEN_RE = re.compile(r"[A-Za-z0-9_]+|[\u4e00-\u9fff]", re.UNICODE)
 ALLOWED_SUFFIXES = {
     ".md", ".markdown", ".txt", ".json", ".csv", ".log",
     ".yaml", ".yml", ".toml", ".ini", ".cfg",
-    ".html", ".htm", ".pdf", ".docx", ".png",
+    ".html", ".htm", ".pdf", ".docx",
 }
-
-
-def parse_tavern_card(data: bytes) -> Optional[dict]:
-    """解析酒馆 (SillyTavern) 角色卡或预设（支持 JSON 与 PNG 内嵌元数据卡）。"""
-    # 1. 尝试 JSON 格式角色卡 / 预设
-    try:
-        text = data.decode("utf-8", errors="ignore").lstrip("\ufeff").strip()
-        if text.startswith("{") and text.endswith("}"):
-            obj = json.loads(text)
-            if isinstance(obj, dict):
-                # V2 / V3 规格或标准角色属性
-                if any(k in obj for k in ("spec", "data", "character_version", "first_mes", "scenario", "personality", "description")):
-                    return obj
-                # 兼容 SillyTavern 提示词预设 preset
-                if any(k in obj for k in ("system_prompt", "jailbreak", "impersonate_prompt", "context_prompt", "post_history_instructions")):
-                    return obj
-    except Exception:
-        pass
-
-    # 2. 尝试 PNG 图片（解析 tEXt / iTXt chunk 提取内嵌的 chara / ccv3）
-    if data.startswith(b"\x89PNG\r\n\x1a\n"):
-        import base64
-        import struct
-        offset = 8
-        length = len(data)
-        while offset + 8 <= length:
-            chunk_len = struct.unpack(">I", data[offset:offset+4])[0]
-            chunk_type = data[offset+4:offset+8]
-            chunk_data = data[offset+8:offset+8+chunk_len]
-            offset += 8 + chunk_len + 4  # 4 bytes CRC
-
-            if chunk_type in (b"tEXt", b"iTXt"):
-                try:
-                    if chunk_type == b"tEXt" and b"\x00" in chunk_data:
-                        keyword, content = chunk_data.split(b"\x00", 1)
-                        if keyword.lower() in (b"chara", b"ccv3"):
-                            raw_json = base64.b64decode(content).decode("utf-8")
-                            return json.loads(raw_json)
-                    elif chunk_type == b"iTXt" and b"\x00" in chunk_data:
-                        parts = chunk_data.split(b"\x00", 4)
-                        if len(parts) >= 2 and parts[0].lower() in (b"chara", b"ccv3"):
-                            content = parts[-1]
-                            raw_json = base64.b64decode(content).decode("utf-8")
-                            return json.loads(raw_json)
-                except Exception:
-                    pass
-    return None
-
-
-def format_tavern_to_markdown(card: dict) -> str:
-    """将酒馆角色卡/预设规范化为清晰易读的高优先级 Markdown 系统级人设文档。"""
-    d = card.get("data") if isinstance(card.get("data"), dict) else card
-    name = str(d.get("name") or card.get("name") or "未命名酒馆角色").strip()
-    desc = str(d.get("description") or card.get("description") or "").strip()
-    personality = str(d.get("personality") or card.get("personality") or "").strip()
-    scenario = str(d.get("scenario") or card.get("scenario") or "").strip()
-    first_mes = str(d.get("first_mes") or card.get("first_mes") or "").strip()
-    mes_example = str(d.get("mes_example") or card.get("mes_example") or "").strip()
-    system_prompt = str(d.get("system_prompt") or card.get("system_prompt") or "").strip()
-    post_history = str(d.get("post_history_instructions") or card.get("post_history_instructions") or "").strip()
-
-    sections = [f"# 酒馆角色与预设：{name}"]
-    if system_prompt:
-        sections.append(f"## 系统指令与行为准则 (System Prompt)\n{system_prompt}")
-    if desc:
-        sections.append(f"## 角色外貌与背景故事 (Description)\n{desc}")
-    if personality:
-        sections.append(f"## 性格特质与心理特征 (Personality)\n{personality}")
-    if scenario:
-        sections.append(f"## 场景环境与人际关系 (Scenario)\n{scenario}")
-    if first_mes:
-        sections.append(f"## 角色经典开场白 (Greeting / First Message)\n{first_mes}")
-    if mes_example:
-        sections.append(f"## 对话示例与语气风格 (Dialogue Examples)\n{mes_example}")
-    if post_history:
-        sections.append(f"## 核心设定强化准则 (Post-History Instructions)\n{post_history}")
-
-    return "\n\n".join(sections)
 
 
 def tokenize(text: str) -> List[str]:
@@ -196,16 +116,11 @@ def strip_html(raw: str) -> str:
 
 
 def extract_text_from_bytes(suffix: str, data: bytes) -> str:
-    """按文件后缀提取纯文本（内置酒馆 PNG/JSON 角色卡与预设解析）。"""
+    """按文件后缀提取纯文本。"""
     suffix = (suffix or "").lower()
 
-    # 优先检测酒馆角色卡 / 预设
-    if suffix in (".png", ".json", ".txt"):
-        t_card = parse_tavern_card(data)
-        if t_card:
-            return format_tavern_to_markdown(t_card)
-        if suffix == ".png":
-            raise RuntimeError("该 PNG 图片不含酒馆角色卡元数据 (tEXt/chara)，仅支持上传酒馆 PNG 角色卡或 JSON 预设文件。")
+    if suffix in (".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp"):
+        raise RuntimeError(f"不支持的图片类型 {suffix}，请上传文档类文件。")
 
     if suffix in (".md", ".markdown", ".txt", ".json", ".csv", ".log",
                   ".yaml", ".yml", ".toml", ".ini", ".cfg"):

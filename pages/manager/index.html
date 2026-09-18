@@ -80,21 +80,20 @@
     <main id="tab-docs" class="tab-pane active">
       <!-- Drag & Drop Upload Zone -->
       <section class="m3-card">
-        <input type="file" id="fileInput" accept=".md,.markdown,.txt,.json,.csv,.log,.yaml,.yml,.toml,.ini,.cfg,.pdf,.docx,.html,.htm,.png" style="display:none;" />
+        <input type="file" id="fileInput" accept=".md,.markdown,.txt,.json,.csv,.log,.yaml,.yml,.toml,.ini,.cfg,.pdf,.docx,.html,.htm" style="display:none;" />
         <label class="dropzone-container" id="dropzone" for="fileInput">
           <div class="dropzone-icon">
             <svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor">
               <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"/>
             </svg>
           </div>
-          <div class="dropzone-title">点击选择或将文档 / 酒馆角色卡拖放到此处</div>
-          <div class="dropzone-sub">单个文件 ≤ 50MB · 原生支持酒馆预设与角色卡 (PNG / JSON) 自动解析</div>
+          <div class="dropzone-title">点击选择或将文档拖放到此处</div>
+          <div class="dropzone-sub">单个文件 ≤ 50MB · 支持 md / txt / pdf / docx / json 等文档格式</div>
           <div class="format-tags">
             <span class="format-pill">MARKDOWN</span>
             <span class="format-pill">TXT</span>
             <span class="format-pill">PDF</span>
             <span class="format-pill">DOCX</span>
-            <span class="format-pill" style="background:#fce7f3; color:#9d174d; font-weight:700;">🍷 酒馆角色卡(PNG/JSON)</span>
             <span class="format-pill">JSON</span>
           </div>
           <div class="upload-progress-bar" id="uploadProgress">
@@ -279,7 +278,6 @@
                   <div class="cmd-row"><code class="mono">/doc workspace</code><span>工作区挂载清单与容量</span></div>
                   <div class="cmd-row"><code class="mono">/doc search &lt;词&gt;</code><span>检索本群绑定文档</span></div>
                   <div class="cmd-row"><code class="mono">/doc read &lt;ID&gt; [n]</code><span>预览文档指定切片</span></div>
-                  <div class="cmd-row"><code class="mono">/doc greeting</code><span>酒馆角色开场白</span></div>
                 </div>
                 <div class="cmd-group">
                   <div class="cmd-group-title">🔗 绑定</div>
