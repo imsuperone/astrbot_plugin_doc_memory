@@ -45,11 +45,19 @@ def apply_system_prompt(req, text: str, replace: bool) -> None:
             pass
 
 
+def truncate_text(body: str, max_chars: int, min_remain: int = 200) -> str:
+    """截断公共逻辑：够长才截并打标记，否则原样返回（专属提示词永不经此截断）。"""
+    body = body or ""
+    if len(body) <= max_chars:
+        return body
+    if max_chars <= min_remain:
+        return body[:max_chars]
+    return body[:max_chars] + "\n…(截断)"
+
+
 def build_system_text(doc_texts: List[str], custom_prompt: str, max_chars: int) -> str:
     """强制遵守模式：文档全文拼接（截断只截文档）+ 专属提示词（永不截断）。"""
-    combined = "\n\n".join(t for t in doc_texts if t)
-    if len(combined) > max_chars:
-        combined = combined[:max_chars] + "\n…(截断)"
+    combined = truncate_text("\n\n".join(t for t in doc_texts if t), max_chars)
     custom_prompt = (custom_prompt or "").strip()
     return f"{combined}\n\n{custom_prompt}" if custom_prompt else combined
 
@@ -68,7 +76,7 @@ def build_workspace_text(
         else:
             remain = max(0, max_chars - total)
             if remain > 200:
-                sections.append(f"/workspace/{fname}:\n{body[:remain]}\n…(截断)")
+                sections.append(f"/workspace/{fname}:\n{truncate_text(body, remain)}")
                 total += remain
     content = "\n\n".join(sections)
     custom_prompt = (custom_prompt or "").strip()

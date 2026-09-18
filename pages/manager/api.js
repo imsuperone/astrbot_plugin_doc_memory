@@ -134,17 +134,21 @@
     },
 
     async upload(endpoint, file) {
-      // 1. 优先使用 base64 JSON 直传（彻底消除 iframe 跨域 FormData 克隆失效与字段名不匹配问题）
-      try {
-        const b64 = await fileToBase64(file);
-        if (b64) {
-          return await api.post(endpoint, {
-            filename: file.name,
-            file_base64: b64,
-          });
+      // 大文件跳过 base64（体积膨胀约 1/3 且后端 JSON 解析吃内存），直接走 multipart；
+      // 小文件仍优先 base64 JSON 直传（彻底消除 iframe 跨域 FormData 克隆失效与字段名不匹配问题）
+      const useBase64 = !file || !file.size || file.size <= 8 * 1024 * 1024;
+      if (useBase64) {
+        try {
+          const b64 = await fileToBase64(file);
+          if (b64) {
+            return await api.post(endpoint, {
+              filename: file.name,
+              file_base64: b64,
+            });
+          }
+        } catch (e) {
+          console.warn("[DocMemory] Base64 upload fallback:", e);
         }
-      } catch (e) {
-        console.warn("[DocMemory] Base64 upload fallback:", e);
       }
 
       // 2. 备用方式：FormData

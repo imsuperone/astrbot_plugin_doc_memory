@@ -4,7 +4,7 @@
 
 -   📦 项目主页：[https://github.com/imsuperone/xbdoc](https://github.com/imsuperone/xbdoc)
 -   🔌 插件 ID：`astrbot_plugin_xbdoc`
--   📌 版本：`v1.2.0`，要求 AstrBot `>=4.16`
+-   📌 版本：`v1.3.0`，要求 AstrBot `>=4.16`
 
 ---
 
@@ -102,3 +102,4 @@
 -   关闭 `auto_inject` 后不再自动检索文档，但专属提示词与屏蔽依然生效。
 -   数据持久化在 `data/plugin_data/astrbot_plugin_xbdoc`（`index.json` / `bindings.json` / `seen_groups.json` / `docs/`）。
 -   卸载重装不会丢数据；要彻底清零请先停服再删除上述数据目录。
+-   自带 `tests/`（`python tests/test_retrieval.py`、`python tests/test_plugin.py`），改检索 / 会话 / 存储逻辑后先跑绿再提。

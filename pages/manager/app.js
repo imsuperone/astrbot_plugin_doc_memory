@@ -420,13 +420,16 @@
 
   // ---- Group Search Auto-Suggest ----
   let suggestTimer = null;
+  let suggestSeq = 0; // 单调序号：旧请求先回也直接丢弃，防联想结果乱序覆盖
   async function searchGroups(q = "") {
+    const mySeq = ++suggestSeq;
     try {
       const res = await api.get("groups", q ? { q, limit: 30 } : { limit: 30 });
+      if (mySeq !== suggestSeq) return null;
       groupsCache = res.groups || res.data?.groups || [];
       return groupsCache;
     } catch (e) {
-      return [];
+      return mySeq === suggestSeq ? [] : null;
     }
   }
 
@@ -434,7 +437,7 @@
     const box = $("suggestDropdown");
     if (!box) return;
 
-    if (!list.length) {
+    if (!list || !list.length) {
       box.classList.remove("open");
       box.innerHTML = "";
       return;
@@ -482,7 +485,12 @@
 
           const list = res.groups || res.data?.groups || [];
           const newCount = res.new_fetched !== undefined ? res.new_fetched : list.length;
-          groupsCache = list.length ? list : await searchGroups("");
+          if (list.length) {
+            groupsCache = list;
+          } else {
+            const g = await searchGroups("");
+            if (g) groupsCache = g;
+          }
           renderGroupSuggest(groupsCache);
           input.focus();
 
@@ -557,7 +565,7 @@
       clearTimeout(suggestTimer);
       const q = input.value.trim();
       if (!q) {
-        searchGroups("").then(renderGroupSuggest);
+        searchGroups("").then((list) => { if (list) renderGroupSuggest(list); });
         return;
       }
       if (/^group:\d+$/.test(q)) {
@@ -566,7 +574,7 @@
       }
       suggestTimer = setTimeout(async () => {
         const list = await searchGroups(q);
-        renderGroupSuggest(list);
+        if (list) renderGroupSuggest(list);
       }, 220);
     });
 
@@ -574,7 +582,7 @@
       const q = input.value.trim();
       if (/^group:\d+$/.test(q)) return;
       const list = groupsCache.length ? groupsCache : await searchGroups(q);
-      renderGroupSuggest(list);
+      if (list) renderGroupSuggest(list);
     };
 
     input.addEventListener("focus", showList);
