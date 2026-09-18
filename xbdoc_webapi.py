@@ -352,13 +352,13 @@ class XbdocWebAPIMixin:
             self._bots_cache = {"targets": list(targets), "ts": time.time()}
             return targets
 
-        # 3. 兜底：有界泛遍历（官方通道与事件缓存都 miss 才走；预算从严，防卡顿）
+        # 3. 兜底：有界泛遍历（官方通道与事件缓存都 miss 才走；预算给足，宁可慢一次也不漏适配器）
         import inspect
         visited: set = set()
-        budget = [200]
+        budget = [800]
 
         def _traverse(obj, depth=0):
-            if depth > 3 or obj is None or budget[0] <= 0:
+            if depth > 4 or obj is None or budget[0] <= 0:
                 return
             oid = id(obj)
             if oid in visited:
@@ -410,12 +410,12 @@ class XbdocWebAPIMixin:
         async def _call(cand, act):
             try:
                 if callable(getattr(cand, "call_action", None)):
-                    return await asyncio.wait_for(cand.call_action(act), timeout=4)
+                    return await asyncio.wait_for(cand.call_action(act), timeout=5)
                 if callable(getattr(cand, "call_api", None)):
-                    return await asyncio.wait_for(cand.call_api(act), timeout=4)
+                    return await asyncio.wait_for(cand.call_api(act), timeout=5)
                 fn = getattr(cand, act, None)
                 if callable(fn):
-                    return await asyncio.wait_for(fn(), timeout=4)
+                    return await asyncio.wait_for(fn(), timeout=5)
             except Exception:
                 pass
             return None
@@ -427,12 +427,12 @@ class XbdocWebAPIMixin:
                 results = []
             return (cand, results)
 
-        # 全体并发 + 整体 12 秒熔断（超时自动取消子任务）；多适配器结果合并，不再首个成功即停
+        # 全体并发 + 整体 18 秒熔断（超时自动取消子任务）；多适配器结果合并，不再首个成功即停
         per_bot: List[Any] = []
         try:
             per_bot = await asyncio.wait_for(
                 asyncio.gather(*[_try_bot(b) for b in bots[:5]], return_exceptions=True),
-                timeout=12,
+                timeout=18,
             )
         except Exception:
             per_bot = []

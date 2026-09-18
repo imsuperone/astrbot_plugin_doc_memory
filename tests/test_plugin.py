@@ -505,6 +505,22 @@ def test_platform_object_extraction():
     assert p._canonical_key(ev4) == "group:aiocqhttp:753700701"
 
 
+def test_insane_keys_dropped_on_load():
+    import xbdoc_store as S
+    assert not S.XbdocStoreMixin._is_sane_key(
+        "group:PlatformMetadata(name='aiocqhttp', description='x'):123")
+    assert S.XbdocStoreMixin._is_sane_key("group:aiocqhttp:123")
+    assert S.XbdocStoreMixin._is_sane_key("group:123")
+    p, _ = _make_plugin()
+    p._bindings = p._normalize_bindings({
+        "group:PlatformMetadata(name='aiocqhttp'):123": {"doc_ids": ["d"], "prompt": "",
+            "shield": False, "mode": "reference", "force_system_prompt": False},
+        "group:onebot:123": {"doc_ids": [], "prompt": "hi", "shield": False,
+            "mode": "reference", "force_system_prompt": False},
+    })
+    assert set(p._bindings.keys()) == {"group:onebot:123"}, p._bindings.keys()
+
+
 if __name__ == "__main__":
     test_mro()
     test_config_defaults_in_sync()
@@ -524,4 +540,5 @@ if __name__ == "__main__":
     test_qualify_session_key()
     test_export_import_roundtrip()
     test_platform_object_extraction()
+    test_insane_keys_dropped_on_load()
     print("test_plugin PASSED")

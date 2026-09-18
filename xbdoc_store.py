@@ -101,7 +101,14 @@ class XbdocStoreMixin:
 
         # 加载并自动标准化数据（有变才回写，避免每次启动空转 I/O）
         self._index: Dict[str, Dict[str, Any]] = self._load_json(self.index_path, {})
-        self._seen_groups: Dict[str, Dict[str, Any]] = self._load_json(self.seen_path, {})
+        _raw_seen = self._load_json(self.seen_path, {})
+        self._seen_groups: Dict[str, Dict[str, Any]] = {
+            k: v for k, v in (_raw_seen or {}).items() if self._is_sane_key(str(k))
+        }
+        if isinstance(_raw_seen, dict) and len(self._seen_groups) != len(_raw_seen):
+            dropped = len(_raw_seen) - len(self._seen_groups)
+            logger.warning(f"[{PLUGIN_NAME}] 启动清理污染群记录 {dropped} 条")
+            self._save_seen()
         _raw_bindings = self._load_json(self.bindings_path, {})
         self._bindings: Dict[str, Dict[str, Any]] = self._normalize_bindings(_raw_bindings)
         if self._bindings != _raw_bindings and self.bindings_path.exists():
@@ -614,6 +621,19 @@ class XbdocStoreMixin:
         return ck or "default"
 
 
+    @staticmethod
+    def _is_sane_key(cks: str) -> bool:
+        """key 可用性：限定 key 的平台段必须合法（字母数字下划线短横，≤32）。
+
+        历史 bug 曾把 PlatformMetadata 整对象 repr 写进 key，这类残骸永远匹配不到
+        真实事件，直接丢弃。无平台段的老/裸 key 视为可用。
+        """
+        kind, plat, _ident = XbdocStoreMixin._split_session_key(cks)
+        if kind and plat:
+            if len(plat) > 32 or not re.match(r"^[A-Za-z0-9_\-]+$", plat):
+                return False
+        return True
+
     def _normalize_bindings(self, raw: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
         """标准化绑定：key 归一、模式归一，同 key 条目确定性合并。"""
         out: Dict[str, Dict[str, Any]] = {}
@@ -622,6 +642,9 @@ class XbdocStoreMixin:
         for k, v in raw.items():
             ck = self._canonical_key_str(str(k))
             if not ck or not isinstance(v, dict):
+                continue
+            if not self._is_sane_key(ck):
+                logger.warning(f"[{PLUGIN_NAME}] 丢弃污染会话 key: {str(k)[:80]}")
                 continue
             new_ent = {
                 "doc_ids": [str(i) for i in (v.get("doc_ids") or [])],
