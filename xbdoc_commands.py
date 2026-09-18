@@ -8,6 +8,7 @@ import re
 import time
 from typing import List
 
+from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
 
 try:
@@ -478,6 +479,7 @@ class XbdocCommandsMixin:
             if ent:
                 ent["ignore_history"] = False
                 self._save_json(self.bindings_path, self._bindings)
+            logger.info(f"[{PLUGIN_NAME}] [doc no] 恢复历史读取 (会话: {key})")
             yield event.plain_result(f"✅ 已恢复读取历史消息上下文（会话：{key}）。")
             return
 
@@ -496,6 +498,7 @@ class XbdocCommandsMixin:
         except Exception:
             pass
 
+        logger.info(f"[{PLUGIN_NAME}] [doc no] 清空历史记忆 (会话: {key})")
         yield event.plain_result(
             f"🧹【已清空历史消息记忆】\n\n"
             f"本群（{key}）已彻底清空并停止读取此指令之前的所有消息！\n"
