@@ -4,7 +4,7 @@
 
 -   📦 项目主页：[https://github.com/imsuperone/xbdoc](https://github.com/imsuperone/xbdoc)
 -   🔌 插件 ID：`astrbot_plugin_xbdoc`
--   📌 版本：`v1.0.11`，要求 AstrBot `>=4.16`
+-   📌 版本：`v1.0.12`，要求 AstrBot `>=4.16`
 
 ---
 
