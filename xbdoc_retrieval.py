@@ -137,13 +137,6 @@ def chunk_text(text: str, chunk_size: int = 1500, overlap: int = 200) -> List[st
     return [c for c in chunks if c.strip()]
 
 
-def score_chunk(query_tokens: List[str], chunk_tokens: List[str]) -> float:
-    """TF 加权与覆盖率综合计分。"""
-    if not query_tokens or not chunk_tokens:
-        return 0.0
-    return score_chunk_tf(query_tokens, Counter(chunk_tokens))
-
-
 def score_chunk_tf(query_tokens: List[str], tf: Counter) -> float:
     """基于预计算词频计分，避免每次检索重复分词（性能优化）。
 

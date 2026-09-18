@@ -11,7 +11,7 @@ desc: |
   - 支持强制注入系统提示词（清空其他提示词，专属提示词直达底层）
   - 聊天指令与管理台双端实时联动，支持 /doc no 历史切断遗忘
   - 数据持久化在 data/plugin_data/astrbot_plugin_xbdoc
-version: 1.3.0
+version: 1.0.11
 author: Light
 repo: https://github.com/imsuperone/xbdoc
 astrbot_version: ">=4.16"

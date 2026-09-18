@@ -130,7 +130,7 @@ class XbdocPlugin(XbdocStoreMixin, XbdocCommandsMixin, XbdocWebAPIMixin, Star):
 
     def build_inject_text(self, query: str, doc_ids: List[str]) -> str:
         max_chars = self._cfg_int("max_inject_chars")
-        hits = self.retrieve(query, doc_ids, self._cfg_int("top_k"))
+        hits = self.retrieve(query, doc_ids)
         if not hits:
             return ""
         parts = []

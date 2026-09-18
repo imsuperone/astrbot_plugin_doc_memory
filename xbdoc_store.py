@@ -11,7 +11,7 @@ import threading
 import time
 from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
