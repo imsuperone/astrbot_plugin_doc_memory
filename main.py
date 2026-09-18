@@ -2,11 +2,14 @@
 
 import hashlib
 import json
+import math
+import os
 import re
+import threading
 import time
 from collections import Counter
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent, filter
@@ -48,7 +51,7 @@ try:
         extract_text_from_bytes,
         format_tavern_to_markdown,
         parse_tavern_card,
-        score_chunk_tf,
+        score_chunk_bm25,
         tokenize,
     )
     from .xbdoc_inject import apply_system_prompt, build_system_text, build_workspace_text
@@ -63,7 +66,7 @@ except ImportError:
         extract_text_from_bytes,
         format_tavern_to_markdown,
         parse_tavern_card,
-        score_chunk_tf,
+        score_chunk_bm25,
         tokenize,
     )
     from xbdoc_inject import apply_system_prompt, build_system_text, build_workspace_text
@@ -108,6 +111,7 @@ class XbdocPlugin(Star):
         self._chunk_cache: Dict[str, List[str]] = {}  # 内存缓存：doc_id -> chunks
         self._chunk_tokens_cache: Dict[str, List[Counter]] = {}  # 性能优化：doc_id -> 每切片词频
         self._seen_save_ts = 0  # 群记录节流时间戳（仅内存，不落盘）
+        self._save_lock = threading.Lock()  # 落盘锁：防 WebUI 与聊天指令并发写撕裂 tmp 文件
 
         if _HAS_WEB_API:
             try:
@@ -183,8 +187,12 @@ class XbdocPlugin(Star):
         return default
 
     def _save_json(self, path: Path, data: Any) -> None:
+        # 原子写：先落 tmp 再 os.replace，同文件系统下读方永不见半截文件
         try:
-            path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+            with self._save_lock:
+                tmp = path.with_name(f"{path.name}.tmp")
+                tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+                os.replace(tmp, path)
         except Exception as e:
             logger.error(f"[{PLUGIN_NAME}] 保存 {path.name} 失败: {e}")
 
@@ -517,9 +525,34 @@ class XbdocPlugin(Star):
             "doc_ids": [], "prompt": "", "shield": False, "mode": "reference", "force_system_prompt": False,
         })
 
-    def _peek_entry(self, session_key: str) -> Dict[str, Any]:
-        """只读不创建，避免每次对话污染 bindings。"""
-        return self._bindings.get(self._canonical_key_str(session_key)) or {}
+    def _resolve_session(self, event_or_key: Any, create: bool = False) -> Tuple[str, Dict[str, Any]]:
+        """全插件统一会话解析：canonical 优先命中，其次兼容历史脏 key。
+
+        返回 (matched_key, entry)。create=False 时未命中返回 {} 且绝不写 bindings，
+        调用方拿到的 key 即真正生效的 key，不再各算一遍。
+        """
+        if isinstance(event_or_key, str):
+            cands = [event_or_key]
+        else:
+            try:
+                primary = self._canonical_key(event_or_key)
+            except Exception:
+                primary = "default"
+            cands = [primary]
+            try:
+                for k in self._session_keys(event_or_key):
+                    if k not in cands:
+                        cands.append(k)
+            except Exception:
+                pass
+        for k in cands:
+            ck = self._canonical_key_str(k)
+            if ck and ck in self._bindings:
+                return ck, self._bindings[ck]
+        primary_ck = self._canonical_key_str(cands[0]) if cands else "default"
+        if create:
+            return primary_ck, self._get_entry(primary_ck)
+        return primary_ck, {}
 
     @staticmethod
     def _normalize_mode(mode: str) -> str:
@@ -560,15 +593,8 @@ class XbdocPlugin(Star):
         return list(self._effective_session(event).get("doc_ids", []))
 
     def _effective_session(self, event: AstrMessageEvent) -> Dict[str, Any]:
-        """获取本会话综合生效配置（严格群唯一化）。"""
-        ck = self._canonical_key(event)
-        ent = self._bindings.get(ck)
-        if not ent:
-            for k in self._session_keys(event):
-                if k in self._bindings:
-                    ent = self._bindings[k]
-                    break
-        ent = ent or {}
+        """获取本会话综合生效配置（canonical 优先、脏 key 兼容，matched_key 即真实命中）。"""
+        key, ent = self._resolve_session(event, create=False)
         doc_ids = [d for d in ent.get("doc_ids", []) if d in self._index]
         return {
             "doc_ids": doc_ids,
@@ -576,7 +602,8 @@ class XbdocPlugin(Star):
             "shield": bool(ent.get("shield", False)),
             "mode": str(ent.get("mode") or "reference"),
             "force_system_prompt": bool(ent.get("force_system_prompt", False)),
-            "matched_key": ck,
+            "ignore_history": bool(ent.get("ignore_history", False)),
+            "matched_key": key,
             "has_entry": bool(ent),
         }
 
@@ -610,12 +637,6 @@ class XbdocPlugin(Star):
     def set_session_prompt(self, session_key: str, prompt: str) -> Dict[str, Any]:
         ent = self._get_entry(session_key)
         ent["prompt"] = (prompt or "").strip()
-        self._save_json(self.bindings_path, self._bindings)
-        return ent
-
-    def set_session_shield(self, session_key: str, shield: bool) -> Dict[str, Any]:
-        ent = self._get_entry(session_key)
-        ent["shield"] = bool(shield)
         self._save_json(self.bindings_path, self._bindings)
         return ent
 
@@ -656,6 +677,19 @@ class XbdocPlugin(Star):
         scored: List[Dict[str, Any]] = []
         q_lower = clean_q.lower()
 
+        # BM25 全局量：N/avg_len/df 在绑定文档全量切片上一次算好，Counter 全走缓存，零重复分词
+        _all_counters: List[Counter] = []
+        for _did in doc_ids:
+            if _did in self._index:
+                _all_counters.extend(self._get_chunk_counters(_did))
+        _n = len(_all_counters)
+        _avg_len = sum(sum(_c.values()) for _c in _all_counters) / _n if _n else 0.0
+        _df: Counter = Counter()
+        for _c in _all_counters:
+            for _t in _c.keys():
+                _df[_t] += 1
+        _idf = {t: math.log((_n - f + 0.5) / (f + 0.5) + 1.0) for t, f in _df.items()}
+
         for did in doc_ids:
             meta = self._index.get(did)
             if not meta:
@@ -672,7 +706,7 @@ class XbdocPlugin(Star):
             counters = self._get_chunk_counters(did)
             for idx, ch in enumerate(chunks):
                 tf = counters[idx] if idx < len(counters) else Counter()
-                s = score_chunk_tf(qtokens, tf) if qtokens else 0.0
+                s = score_chunk_bm25(qtokens, tf, sum(tf.values()), _avg_len, _idf) if qtokens else 0.0
                 if fname_hit:
                     s += 10.0
                 if s > 0:
@@ -726,7 +760,7 @@ class XbdocPlugin(Star):
             if is_private and not bool(self._cfg("allow_private_bind", True)):
                 return
 
-            # 只读不创建：避免每次对话凭空制造空绑定（曾导致解绑后仍残留空条目）
+            # 只读不创建：统一会话解析，一处确定 matched_key 与全部生效配置
             sess = self._effective_session(event)
             c_key = str(sess.get("matched_key") or self._canonical_key(event))
             doc_ids = [d for d in sess.get("doc_ids", []) if d in self._index]
@@ -734,12 +768,7 @@ class XbdocPlugin(Star):
             shield = bool(sess.get("shield", False))
             mode = str(sess.get("mode") or "reference").lower()
             custom_prompt = str(sess.get("prompt") or "").strip()
-            ent_raw = self._bindings.get(c_key) or {}
-            for k in self._session_keys(event):
-                if k in self._bindings:
-                    ent_raw = self._bindings[k]
-                    break
-            ignore_history = bool(ent_raw.get("ignore_history", False))
+            ignore_history = bool(sess.get("ignore_history", False))
 
             # 0. /doc no 指令支持：彻底清空此前所有历史消息，不再读取与记忆
             if ignore_history:
@@ -1118,12 +1147,13 @@ class XbdocPlugin(Star):
         if bad:
             yield event.plain_result(f"❌ 绑定失败：以下 ID 不存在于知识库中：\n{', '.join(bad)}\n\n💡 请发送 /doc list 查看可用 ID。")
             return
-        key = self._canonical_key(event)
-        existed = [d for d in self._peek_entry(key).get("doc_ids", []) if d in self._index]
+        # 统一会话解析：历史脏 key 下已有绑定则复用，避免 canonical 下另起条目造成分裂
+        key, _resolved = self._resolve_session(event, create=False)
+        existed = [d for d in _resolved.get("doc_ids", []) if d in self._index]
         added = [i for i in ids if i not in existed]
         dup = [i for i in ids if i in existed]
         self.bind_docs(key, existed + added)
-        ent = self._peek_entry(key)
+        ent = self._bindings.get(key) or {}
         m = str(ent.get("mode") or "reference")
         mode_txt = "⚡ 强制遵守（系统提示词）" if m == "system" else ("💻 模拟工作区" if m == "workspace" else "📖 仅作参考资料")
 
@@ -1268,8 +1298,7 @@ class XbdocPlugin(Star):
 
     async def doc_mode(self, event: AstrMessageEvent, mode: str = "", *rest: str):
         """设置本群文档生效模式 /doc mode workspace|system|reference（管理员，需先绑定文档）"""
-        key = self._canonical_key(event)
-        ent = self._peek_entry(key)
+        key, ent = self._resolve_session(event, create=False)
         if not [d for d in ent.get("doc_ids", []) if d in self._index]:
             yield event.plain_result(
                 f"⚠️ 本群（{key}）当前未绑定任何文档，无法切换生效模式。\n\n"
@@ -1316,7 +1345,7 @@ class XbdocPlugin(Star):
         if len(text) > 4000:
             yield event.plain_result("提示词超出 4000 字上限，请精简后重试。")
             return
-        key = self._canonical_key(event)
+        key, _ = self._resolve_session(event, create=False)
         self.set_session_prompt(key, text)
         yield event.plain_result(
             f"✅【本群专属提示词已生效】\n"
@@ -1327,8 +1356,7 @@ class XbdocPlugin(Star):
 
     async def doc_prompt_clear(self, event: AstrMessageEvent):
         """清空本群提示词 /doc prompt_clear（管理员）"""
-        key = self._canonical_key(event)
-        ent = self._peek_entry(key)
+        key, ent = self._resolve_session(event, create=False)
         if not ent:
             yield event.plain_result(f"⚠️ 本群（{key}）当前未设置专属提示词。")
             return
@@ -1340,8 +1368,8 @@ class XbdocPlugin(Star):
     async def doc_shield(self, event: AstrMessageEvent, mode: str = "", *rest: str):
         """本群屏蔽 AstrBot 原人格开关 /doc shield on|off（管理员）"""
         raw = (mode or re.sub(r"^/doc\s+shield\s*", "", event.message_str or "")).strip().lower()
-        key = self._canonical_key(event)
-        cur_shield = bool(self._peek_entry(key).get("shield", False))
+        key, _resolved = self._resolve_session(event, create=False)
+        cur_shield = bool(_resolved.get("shield", False))
 
         if raw in ("on", "开", "1", "true"):
             target_shield = True
@@ -1365,8 +1393,8 @@ class XbdocPlugin(Star):
     async def doc_force(self, event: AstrMessageEvent, *args):
         """切换强制注入系统提示词开关 /doc force on|off（管理员）"""
         raw = " ".join(args).strip().lower()
-        key = self._canonical_key(event)
-        cur = bool(self._peek_entry(key).get("force_system_prompt", False))
+        key, _resolved = self._resolve_session(event, create=False)
+        cur = bool(_resolved.get("force_system_prompt", False))
 
         if raw in ("on", "开", "1", "true"):
             target = True
@@ -1390,10 +1418,10 @@ class XbdocPlugin(Star):
     async def doc_no(self, event: AstrMessageEvent, *args):
         """清空历史记忆并停止读取此指令之前的消息 /doc no [off]"""
         raw = " ".join(args).strip().lower()
-        key = self._canonical_key(event)
+        key, _resolved = self._resolve_session(event, create=False)
 
         if raw in ("off", "恢复", "false", "0", "no_off", "reset", "yes"):
-            ent = self._peek_entry(key)
+            ent = _resolved
             if ent:
                 ent["ignore_history"] = False
                 self._save_json(self.bindings_path, self._bindings)

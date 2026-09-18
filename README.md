@@ -4,14 +4,14 @@
 
 -   📦 项目主页：[https://github.com/imsuperone/xbdoc](https://github.com/imsuperone/xbdoc)
 -   🔌 插件 ID：`astrbot_plugin_xbdoc`
--   📌 版本：`v1.1.3`，要求 AstrBot `>=4.16`
+-   📌 版本：`v1.2.0`，要求 AstrBot `>=4.16`
 
 ---
 
 ## 🌟 核心特性
 
 -   ⚡ **三大生效模式**：`system` 强制遵守（文档直灌系统提示词） / `workspace` 模拟工作区（`/workspace/` 沙箱挂载） / `reference` 仅作参考资料（提问时按需检索）。
--   🧠 **零 Embedding 检索**：无需向量模型，中英分词 + TF 加权 + 覆盖率计分，切片词频全缓存，Top-K 注入。
+-   🧠 **零 Embedding 检索**：无需向量模型，中英分词 + BM25（idf + 长度归一），切片词频全缓存，Top-K 注入。
 -   🍷 **酒馆原生支持**：SillyTavern 角色卡 / 预设自动解析（PNG 内嵌 `chara/ccv3` 与 JSON），`/doc greeting` 直看开场白。
 -   👥 **按群彻底隔离**：会话 Key 归一（`group:` / `private:`），绑定、提示词、屏蔽、模式各群独立。
 -   🏷️ **群专属提示词**：无文档也可独立生效；`shield` 清空原人格、`force` 强制唯一系统词，三模式下恰好生效一次。

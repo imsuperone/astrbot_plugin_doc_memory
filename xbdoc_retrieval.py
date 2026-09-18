@@ -5,6 +5,7 @@
 
 import io
 import json
+import math
 import re
 from collections import Counter
 from typing import List, Optional
@@ -144,7 +145,10 @@ def score_chunk(query_tokens: List[str], chunk_tokens: List[str]) -> float:
 
 
 def score_chunk_tf(query_tokens: List[str], tf: Counter) -> float:
-    """基于预计算词频计分，避免每次检索重复分词（性能优化）。"""
+    """基于预计算词频计分，避免每次检索重复分词（性能优化）。
+
+    历史算法保留作兼容；新检索默认走 score_chunk_bm25。
+    """
     if not query_tokens or not tf:
         return 0.0
     score = 0.0
@@ -154,6 +158,38 @@ def score_chunk_tf(query_tokens: List[str], tf: Counter) -> float:
         if c > 0:
             w = 0.5 if len(t) == 1 and "一" <= t <= "鿿" else 1.0
             score += w * (1.0 + 0.3 * (min(c, 5) - 1))
+    hits = sum(1 for t in unique_q if tf.get(t, 0) > 0)
+    score *= 1.0 + 0.2 * (hits / max(1, len(unique_q)))
+    return round(score, 4)
+
+
+def score_chunk_bm25(
+    query_tokens: List[str],
+    tf: Counter,
+    doc_len: int,
+    avg_len: float,
+    idf: dict,
+    k1: float = 1.2,
+    b: float = 0.75,
+) -> float:
+    """轻量 BM25 计分：预计算词频 + 全局 idf + 长度归一，仍零 embedding。
+
+    idf 由调用方在绑定文档全量切片上一次算好传入。
+    """
+    if not query_tokens or not tf or not idf or avg_len <= 0:
+        return 0.0
+    score = 0.0
+    unique_q = set(query_tokens)
+    norm = k1 * (1.0 - b + b * (doc_len / avg_len))
+    for t in unique_q:
+        c = tf.get(t, 0)
+        if c <= 0:
+            continue
+        idf_t = idf.get(t, 0.0)
+        if idf_t <= 0:
+            continue
+        w = 0.5 if len(t) == 1 and "一" <= t <= "鿿" else 1.0
+        score += w * idf_t * (c * (k1 + 1.0)) / (c + norm)
     hits = sum(1 for t in unique_q if tf.get(t, 0) > 0)
     score *= 1.0 + 0.2 * (hits / max(1, len(unique_q)))
     return round(score, 4)
