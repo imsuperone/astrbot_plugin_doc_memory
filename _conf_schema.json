@@ -34,5 +34,11 @@
     "hint": "关闭后仅群聊生效。",
     "type": "bool",
     "default": true
+  },
+  "perf_log": {
+    "description": "性能日志（排查回复慢）",
+    "hint": "开启后每条回复记录插件耗时、注入字数与上下文规模，定位慢的原因。",
+    "type": "bool",
+    "default": false
   }
 }

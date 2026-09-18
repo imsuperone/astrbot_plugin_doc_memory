@@ -2,6 +2,7 @@
 
 import math
 import re
+import time
 from collections import Counter
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -148,9 +149,29 @@ class XbdocPlugin(XbdocStoreMixin, XbdocCommandsMixin, XbdocWebAPIMixin, Star):
 
 
     # ---------- LLM 钩子 ----------
+    def _log_perf(self, c_key: str, t0: float, t_mid: float, injected_chars: int, req) -> None:
+        """性能日志：perf_log 开启时记录插件各段耗时、注入字数与上下文规模（默认关闭，零打扰）。"""
+        try:
+            if not bool(self._cfg("perf_log")):
+                return
+            hist = 0
+            for a in ("contexts", "messages", "history", "chat_history"):
+                v = getattr(req, a, None)
+                if isinstance(v, list):
+                    hist += len(v)
+            now = time.perf_counter()
+            logger.info(
+                f"[{PLUGIN_NAME}] [性能] {c_key}：插件总耗时 {(now - t0) * 1000:.1f}ms"
+                f"（会话解析 {(t_mid - t0) * 1000:.1f}ms）"
+                f" · 本次注入 {injected_chars} 字 · 上下文 {hist} 条"
+            )
+        except Exception:
+            pass
+
     @filter.on_llm_request()
     async def _inject_docs(self, event: AstrMessageEvent, req):
         try:
+            t0 = time.perf_counter()
             try:
                 is_private = not event.get_group_id()
             except Exception:
@@ -160,6 +181,7 @@ class XbdocPlugin(XbdocStoreMixin, XbdocCommandsMixin, XbdocWebAPIMixin, Star):
 
             # 只读不创建：统一会话解析，一处确定 matched_key 与全部生效配置
             sess = self._effective_session(event)
+            t_mid = time.perf_counter()
             c_key = str(sess.get("matched_key") or self._canonical_key(event))
             doc_ids = [d for d in sess.get("doc_ids", []) if d in self._index]
             has_bound = bool(doc_ids)
@@ -191,7 +213,8 @@ class XbdocPlugin(XbdocStoreMixin, XbdocCommandsMixin, XbdocWebAPIMixin, Star):
             max_chars = self._cfg_no_limit("max_inject_chars")
             if not has_bound and custom_prompt:
                 apply_system_prompt(req, custom_prompt, replace=replace_all)
-                logger.info(f"[{PLUGIN_NAME}] [专属系统词模式] 无文档，专属系统提示词独立生效 (会话: {c_key})")
+                self._log_perf(c_key, t0, t_mid, len(custom_prompt), req)
+                logger.info(f"[{PLUGIN_NAME}] [专属系统词模式] 无文档，专属系统提示词独立生效 (会话: {c_key}，{len(custom_prompt)} 字)")
                 return
 
             # 无文档且无提示词时的空载响应
@@ -205,12 +228,12 @@ class XbdocPlugin(XbdocStoreMixin, XbdocCommandsMixin, XbdocWebAPIMixin, Star):
             # -------------------------------------------------------------
             if mode == "system" and has_bound:
                 doc_texts = [self._get_full_text(did) for did in doc_ids]
-                apply_system_prompt(
-                    req, build_system_text(doc_texts, custom_prompt, max_chars), replace=replace_all
-                )
+                sys_text = build_system_text(doc_texts, custom_prompt, max_chars)
+                apply_system_prompt(req, sys_text, replace=replace_all)
 
                 # 保持 req.prompt 纯净，绝不向用户发言拼入文档正文
-                logger.info(f"[{PLUGIN_NAME}] [强制遵守模式] 文档已作为系统提示词载入 (会话: {c_key})")
+                self._log_perf(c_key, t0, t_mid, len(sys_text), req)
+                logger.info(f"[{PLUGIN_NAME}] [强制遵守模式] 文档已作为系统提示词载入 (会话: {c_key}，{len(sys_text)} 字)")
                 return
 
             # -------------------------------------------------------------
@@ -221,12 +244,12 @@ class XbdocPlugin(XbdocStoreMixin, XbdocCommandsMixin, XbdocWebAPIMixin, Star):
                 for did in doc_ids:
                     meta = self._index.get(did, {})
                     files.append((meta.get("filename", did), self._get_full_text(did)))
-                apply_system_prompt(
-                    req, build_workspace_text(files, custom_prompt, max_chars), replace=replace_all
-                )
+                ws_text = build_workspace_text(files, custom_prompt, max_chars)
+                apply_system_prompt(req, ws_text, replace=replace_all)
 
                 # 保持 req.prompt 纯净，绝不向用户发言拼入工作区文件
-                logger.info(f"[{PLUGIN_NAME}] [工作区模式] 纯净挂载工作区文件 (会话: {c_key})")
+                self._log_perf(c_key, t0, t_mid, len(ws_text), req)
+                logger.info(f"[{PLUGIN_NAME}] [工作区模式] 纯净挂载工作区文件 (会话: {c_key}，{len(ws_text)} 字)")
                 return
 
             # -------------------------------------------------------------
@@ -265,7 +288,8 @@ class XbdocPlugin(XbdocStoreMixin, XbdocCommandsMixin, XbdocWebAPIMixin, Star):
                 except Exception:
                     pass
 
-            logger.info(f"[{PLUGIN_NAME}] [参考资料模式] 纯净载入文档记忆 (会话: {c_key})")
+            logger.info(f"[{PLUGIN_NAME}] [参考资料模式] 纯净载入文档记忆 (会话: {c_key}，{len(inject)} 字)")
+            self._log_perf(c_key, t0, t_mid, len(inject), req)
         except Exception as e:
             logger.warning(f"[{PLUGIN_NAME}] 上下文注入异常: {e}")
 

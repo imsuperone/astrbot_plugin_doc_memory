@@ -290,6 +290,42 @@ def test_prompt_no_limit():
     assert build_system_text(["a" * 9000], "PP", 0) == "a" * 9000 + "\n\nPP"
 
 
+def test_inject_docs_splice_and_perf():
+    import tempfile as tf
+    from threading import Lock
+    p, _ = _make_plugin()
+    d = Path(tf.mkdtemp(prefix="xbdoc_t6_"))
+    p.data_dir = d
+    p.docs_dir = d / "docs"
+    p.docs_dir.mkdir(parents=True, exist_ok=True)
+    p.index_path = d / "index.json"
+    p.bindings_path = d / "bindings.json"
+    p.seen_path = d / "seen_groups.json"
+    p._save_lock = Lock()
+    p._index = {}
+    p._bindings = {}
+    p._chunk_cache = {}
+    p._chunk_tokens_cache = {}
+    p._fulltext_cache = {}
+    p._bm25_cache = {}
+    p._seen_groups = {}
+    p._seen_save_ts = 0
+    meta = p.add_document("fruit.md", "apple 是水果\n\nbanana 也是水果".encode("utf-8"))
+    did = meta["doc_id"]
+    p._bindings = {"group:123": dict(doc_ids=[did], prompt="你是助理", shield=False,
+                   mode="reference", force_system_prompt=False)}
+
+    for cfg in ({"perf_log": True}, {}):
+        p.config = cfg
+        ev = _fake_event(gid="123", umo="Group:123", text="介绍一下apple")
+        req = SimpleNamespace(system_prompt="orig", prompt="介绍一下apple",
+                              contexts=[], messages=[], extra_user_content_parts=None)
+        asyncio.run(p._inject_docs(ev, req))
+        assert req.prompt.startswith("介绍一下apple"), req.prompt
+        assert "【参考资料】" in req.prompt and "apple" in req.prompt, req.prompt
+        assert "你是助理" in req.system_prompt, req.system_prompt
+
+
 if __name__ == "__main__":
     test_mro()
     test_init_store_normalize_and_tmp_cleanup()
@@ -298,4 +334,5 @@ if __name__ == "__main__":
     test_bind_status_unbind_flow()
     test_private_seen_and_list()
     test_prompt_no_limit()
+    test_inject_docs_splice_and_perf()
     print("test_plugin PASSED")

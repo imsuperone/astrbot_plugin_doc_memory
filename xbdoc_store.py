@@ -52,6 +52,7 @@ CONFIG_DEFAULTS: Dict[str, Any] = {
     "max_inject_chars": 6000,
     "auto_inject": True,
     "allow_private_bind": True,
+    "perf_log": False,
 }
 
 
