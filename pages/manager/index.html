@@ -241,6 +241,11 @@
               已配置生效的会话
             </div>
             <div class="m3-card-desc">以群名称为主标识，自动规范唯一会话，可清晰查看每个群的屏蔽开启状态。</div>
+            <div style="display:flex; gap:8px; margin-top:10px;">
+              <button id="exportBackupBtn" class="m3-btn m3-btn-outlined m3-btn-sm" type="button">导出备份</button>
+              <button id="importBackupBtn" class="m3-btn m3-btn-outlined m3-btn-sm" type="button">导入恢复</button>
+              <input type="file" id="importBackupFile" accept=".json,application/json" style="display:none;" />
+            </div>
           </div>
         </div>
 

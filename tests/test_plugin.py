@@ -442,6 +442,48 @@ def test_qualify_session_key():
     assert p._qualify_session_key("group:123") == "group:123"
 
 
+def test_export_import_roundtrip():
+    import xbdoc_webapi as W
+    W.json_response = lambda d: d  # noqa: E731
+    W.error_response = lambda msg, status_code=400: {"error": msg, "status": status_code}  # noqa: E731
+
+    def _req(payload, mode="merge"):
+        async def _json(default=None):
+            return payload
+        return SimpleNamespace(json=_json, query={"mode": mode})
+
+    p, _ = _make_plugin()
+    m1 = p.add_document("a.md", "apple".encode("utf-8"))
+    m2 = p.add_document("b.md", "banana".encode("utf-8"))
+    p.bind_docs("group:onebot:1", [m1["doc_id"], m2["doc_id"]])
+    p.set_session_prompt("group:onebot:1", "你是助理")
+
+    # 导出即原样 map
+    data = asyncio.run(p._api_export_bindings())
+    assert set(data.keys()) == {"group:onebot:1"}, data.keys()
+    assert data["group:onebot:1"]["prompt"] == "你是助理"
+
+    # 新实例只有 a 文档：b 自动跳过并回告，提示词保留
+    p2, _ = _make_plugin()
+    p2.add_document("a.md", "apple".encode("utf-8"))
+    W.request = _req(data, "merge")
+    res = asyncio.run(p2._api_import_bindings())
+    assert res.get("ok") and res.get("applied") == 1, res
+    assert m2["doc_id"] in res.get("skipped_docs", []), res
+    ent = p2._bindings["group:onebot:1"]
+    assert ent["doc_ids"] == [m1["doc_id"]] and ent["prompt"] == "你是助理"
+
+    # replace 覆盖掉现有多余条目；非法输入被拒
+    p2.bind_docs("group:onebot:9", [m1["doc_id"]])
+    W.request = _req(data, "replace")
+    res = asyncio.run(p2._api_import_bindings())
+    assert res.get("mode") == "replace" and "group:onebot:9" not in p2._bindings, res
+    W.request = _req(["not", "a", "dict"], "merge")
+    assert "error" in asyncio.run(p2._api_import_bindings())
+    W.request = _req(data, "oops")
+    assert "error" in asyncio.run(p2._api_import_bindings())
+
+
 if __name__ == "__main__":
     test_mro()
     test_config_defaults_in_sync()
@@ -459,4 +501,5 @@ if __name__ == "__main__":
     test_platform_key_canonical()
     test_cross_platform_isolation()
     test_qualify_session_key()
+    test_export_import_roundtrip()
     print("test_plugin PASSED")

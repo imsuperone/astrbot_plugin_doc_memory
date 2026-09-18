@@ -1141,6 +1141,67 @@
     }
   }
 
+  // ---- Backup Export / Import (bindings 原样 JSON，无额外格式) ----
+  function initBackupButtons() {
+    const exportBtn = $("exportBackupBtn");
+    if (exportBtn) {
+      exportBtn.addEventListener("click", async () => {
+        try {
+          showToast("正在导出绑定备份…");
+          const data = await api.get("bindings/export");
+          const map = (data && typeof data === "object" && !Array.isArray(data)) ? data : {};
+          const blob = new Blob([JSON.stringify(map, null, 2)], { type: "application/json" });
+          const dt = new Date();
+          const pad = (n) => String(n).padStart(2, "0");
+          const a = document.createElement("a");
+          a.href = URL.createObjectURL(blob);
+          a.download = `xbdoc-bindings-${dt.getFullYear()}${pad(dt.getMonth() + 1)}${pad(dt.getDate())}-${pad(dt.getHours())}${pad(dt.getMinutes())}.json`;
+          document.body.appendChild(a);
+          a.click();
+          a.remove();
+          setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+          showToast(`✅ 已导出 ${Object.keys(map).length} 个会话绑定`);
+        } catch (err) {
+          showToast("导出失败: " + err.message);
+        }
+      });
+    }
+
+    const importBtn = $("importBackupBtn");
+    const fileEl = $("importBackupFile");
+    if (importBtn && fileEl) {
+      importBtn.addEventListener("click", () => fileEl.click());
+      fileEl.addEventListener("change", async () => {
+        const f = fileEl.files[0];
+        fileEl.value = "";
+        if (!f) return;
+        let map;
+        try {
+          map = JSON.parse(await f.text());
+        } catch (e) {
+          showToast("备份文件不是合法 JSON");
+          return;
+        }
+        if (!map || typeof map !== "object" || Array.isArray(map) || !Object.keys(map).length) {
+          showToast("备份文件里没有绑定数据");
+          return;
+        }
+        const n = Object.keys(map).length;
+        if (!confirm(`从备份导入 ${n} 个会话配置（合并到现有配置）？`)) return;
+        const replace = confirm("是否【覆盖】现有全部配置？\n确定 = 覆盖，取消 = 合并");
+        try {
+          const res = await api.post(`bindings/import?mode=${replace ? "replace" : "merge"}`, map);
+          const skipped = (res.skipped_docs || []).length;
+          showToast(`✅ 已导入 ${res.applied || 0} 个会话${skipped ? `，${skipped} 个文档不存在已跳过` : ""}`);
+          await loadBindings();
+          await searchGroups("");
+        } catch (err) {
+          showToast("导入失败: " + err.message);
+        }
+      });
+    }
+  }
+
   // ---- Refresh All Data Button ----
   function initRefreshButton() {
     const btn = $("refreshAllBtn");
@@ -1176,6 +1237,7 @@
     initBindingForm();
     initBindingListEvents();
     initReaderEvents();
+    initBackupButtons();
     initRefreshButton();
     updatePromptCount();
 

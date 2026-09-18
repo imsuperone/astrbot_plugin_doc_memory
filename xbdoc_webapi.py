@@ -46,6 +46,8 @@ class XbdocWebAPIMixin:
         reg(f"/{PLUGIN_NAME}/groups/fetch", self._api_fetch_groups, ["POST", "GET"], "主动拉取机器人所在群")
         reg(f"/{PLUGIN_NAME}/bindings", self._api_list_bindings, ["GET"], "列出绑定")
         reg(f"/{PLUGIN_NAME}/bindings/save", self._api_save_binding, ["POST"], "保存绑定")
+        reg(f"/{PLUGIN_NAME}/bindings/export", self._api_export_bindings, ["GET"], "导出绑定备份")
+        reg(f"/{PLUGIN_NAME}/bindings/import", self._api_import_bindings, ["POST"], "导入绑定备份")
 
 
     async def _api_list_docs(self):
@@ -238,6 +240,68 @@ class XbdocWebAPIMixin:
                 "mode": ent.get("mode", "reference"),
             }
         return json_response(resp)
+
+
+    async def _api_export_bindings(self):
+        """导出全部会话绑定：即 bindings 原样 map，前端存文件，回导时原样吃，无额外格式。"""
+        return json_response(dict(self._bindings or {}))
+
+
+    async def _api_import_bindings(self):
+        """导入绑定备份：body 即导出的原样 map；?mode=merge（默认，合并）或 replace（整体覆盖）。
+
+        不存在的文档 id 自动跳过并回告；非法条目跳过；空壳不落盘。
+        """
+        payload = await request.json(default={})
+        if not isinstance(payload, dict):
+            return error_response("备份格式错误", status_code=400)
+        mode = str(request.query.get("mode", "merge") or "merge").strip().lower()
+        if mode not in ("merge", "replace"):
+            return error_response("mode 须为 merge 或 replace", status_code=400)
+        if len(payload) > 2000:
+            return error_response("备份会话过多（>2000），请分批导入", status_code=400)
+
+        applied, skipped_docs, skipped_keys = 0, [], []
+        with self._save_lock:
+            if mode == "replace":
+                self._bindings = {}
+            for k, v in payload.items():
+                if not isinstance(v, dict):
+                    skipped_keys.append(str(k))
+                    continue
+                ck = self._canonical_key_str(str(k))
+                if not ck:
+                    skipped_keys.append(str(k))
+                    continue
+                raw_ids = v.get("doc_ids") or []
+                if not isinstance(raw_ids, list):
+                    raw_ids = []
+                docs = [str(d).strip() for d in raw_ids if str(d).strip()]
+                kept = [d for d in docs if d in self._index]
+                skipped_docs.extend(d for d in docs if d not in self._index)
+                new_ent = {
+                    "doc_ids": kept,
+                    "prompt": str(v.get("prompt") or "").strip(),
+                    "shield": bool(v.get("shield", False)),
+                    "force_system_prompt": bool(v.get("force_system_prompt", False)),
+                    "mode": self._normalize_mode(v.get("mode")) or "reference",
+                    "ignore_history": bool(v.get("ignore_history", False)),
+                }
+                if not kept:
+                    new_ent["mode"] = "reference"
+                if ck in self._bindings:
+                    self._merge_entries(self._bindings[ck], new_ent)
+                else:
+                    self._bindings[ck] = new_ent
+                self._prune_empty_entry(ck)
+                if ck in self._bindings:
+                    applied += 1
+            self._save_json(self.bindings_path, self._bindings)
+        return json_response({
+            "ok": True, "mode": mode, "applied": applied,
+            "skipped_docs": sorted(set(skipped_docs)),
+            "skipped_keys": skipped_keys,
+        })
 
 
     def _find_all_bots(self) -> List[Any]:
