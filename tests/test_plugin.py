@@ -174,11 +174,6 @@ def test_resolve_session():
     assert sess["matched_key"] == "xxx:123" and sess["ignore_history"] is True
     k3, e3 = p._resolve_session(_fake_event(gid="456", umo="Group:456"), create=False)
     assert e3 == {} and p._bindings.get("group:onebot:456") is None
-    # 老格式回落：限定 miss 时命中老条目，老数据不断连
-    p._bindings = {"group:123": dict(doc_ids=["d1"], prompt="", shield=False,
-                   mode="reference", force_system_prompt=False)}
-    k4, _ = p._resolve_session(_fake_event(gid="123", umo="Group:123"), create=False)
-    assert k4 == "group:123", k4
 
 
 def test_bind_status_unbind_flow():
@@ -406,7 +401,6 @@ def test_platform_key_canonical():
     # 老格式与脏数据行为不变
     assert C("group:123") == "group:123"
     assert C("123456") == "group:123456"
-    assert C("group:group:123") == "group:123"
     assert C("GroupMessage:999") == "group:999"
     assert C("xxx:123") == "xxx:123"
     assert split("group:onebot:123") == ("group", "onebot", "123")
@@ -414,45 +408,15 @@ def test_platform_key_canonical():
     assert split("xxx:123") == ("", None, "xxx:123")
 
 
-def test_startup_migration_single_claimant():
-    p, tmp = _make_plugin()
-    (tmp / "plugdata").mkdir(parents=True, exist_ok=True)
-    (tmp / "plugdata" / "bindings.json").write_text(
-        json.dumps({
-            "group:999": {"doc_ids": ["d1"], "prompt": "hi", "shield": False,
-                          "mode": "system", "force_system_prompt": False},
-            "group:777": {"doc_ids": [], "prompt": "", "shield": False,
-                          "mode": "reference", "force_system_prompt": False},
-        }, ensure_ascii=False), encoding="utf-8")
-    # 999 被 onebot 单一认领 -> 迁移；777 无认领 -> 保持老格式
-    (tmp / "plugdata" / "seen_groups.json").write_text(
-        json.dumps({"group:onebot:999": {"gid": "999", "group_name": "G", "platform": "onebot",
-                                         "kind": "group", "first_seen": 1,
-                                         "last_seen": 2, "msg_count": 3}},
-                   ensure_ascii=False), encoding="utf-8")
-    p._init_store()
-    assert "group:onebot:999" in p._bindings, p._bindings.keys()
-    assert "group:999" not in p._bindings
-    assert p._bindings["group:onebot:999"]["prompt"] == "hi"
-    assert "group:777" in p._bindings, "无认领老 key 应保留"
-
-
-def test_write_time_adopt_and_isolation():
+def test_cross_platform_isolation():
     p, _ = _make_plugin()
     meta = p.add_document("a.md", "apple".encode("utf-8"))
     did = meta["doc_id"]
-    # 老数据直读不断连
-    p._bindings = {"group:123": dict(doc_ids=[did], prompt="旧提示", shield=False,
-                   mode="reference", force_system_prompt=False)}
     ev = _fake_event(gid="123", umo="Group:123", text=f"/doc bind {did}")
-    sess = p._effective_session(ev)
-    assert sess["matched_key"] == "group:123"
-    # 写时接管：老条目整体搬到限定 key，不分裂
     out = asyncio.run(_collect(p.doc_bind(ev, [did])))
     assert "绑定成功" in out[0], out
-    assert "group:onebot:123" in p._bindings and "group:123" not in p._bindings
-    assert p._bindings["group:onebot:123"]["prompt"] == "旧提示"
-    # 跨平台同号隔离：telegram 的 123 不受影响，各自独立
+    assert p._bindings["group:onebot:123"]["doc_ids"] == [did]
+    # 跨平台同号隔离：telegram 的 123 看不到 onebot 的绑定，各自独立
     ev_tg = _fake_event(gid="123", umo="tg:Group:123", platform_id="tg", platform="tg",
                         text="/doc status")
     assert p._effective_session(ev_tg)["matched_key"] == "group:tg:123"
@@ -493,7 +457,6 @@ if __name__ == "__main__":
     test_mode_validation_and_shortcuts()
     test_force_empty_prompt_keeps_persona()
     test_platform_key_canonical()
-    test_startup_migration_single_claimant()
-    test_write_time_adopt_and_isolation()
+    test_cross_platform_isolation()
     test_qualify_session_key()
     print("test_plugin PASSED")

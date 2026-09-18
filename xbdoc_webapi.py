@@ -207,8 +207,8 @@ class XbdocWebAPIMixin:
 
         # 读改写加锁：WebUI 保存与聊天指令并发时不互相覆盖
         with self._save_lock:
-            # 手填老格式按 seen 补平台限定；限定 key 接管同 id 老条目（自愈，不分裂）
-            key = self._adopt_legacy(self._qualify_session_key(key))
+            # 手填老格式按 seen 补平台限定
+            key = self._qualify_session_key(key)
             valid = self.bind_docs(key, ids)
             ent = self._get_entry(key)
             if "prompt" in payload:

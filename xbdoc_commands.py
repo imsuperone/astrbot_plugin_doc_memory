@@ -181,13 +181,13 @@ class XbdocCommandsMixin:
         if bad:
             yield event.plain_result(f"❌ 绑定失败：以下 ID 不存在于知识库中：\n{', '.join(bad)}\n\n💡 请发送 /doc list 查看可用 ID。")
             return
-        # 读改写加锁：写 key 统一经 _writer_key（解析命中->平台限定->接管老条目，不分裂）
+        # 读改写加锁：两端并发写同一会话不丢数据
         with self._save_lock:
-            key = self._writer_key(event)
+            key, _ = self._resolve_session(event, create=False)
             existed = [d for d in (self._bindings.get(key) or {}).get("doc_ids", []) if d in self._index]
             added = [i for i in ids if i not in existed]
             dup = [i for i in ids if i in existed]
-            self.bind_docs(key, existed + added, event)
+            self.bind_docs(key, existed + added)
             self._save_json(self.bindings_path, self._bindings)
             ent = self._bindings.get(key) or {}
             mode_txt = mode_label(ent.get("mode"))
@@ -362,8 +362,8 @@ class XbdocCommandsMixin:
             )
             return
         with self._save_lock:
-            key = self._writer_key(event)
-            self.set_session_mode(key, norm, event)
+            key, _ = self._resolve_session(event, create=False)
+            self.set_session_mode(key, norm)
         if norm == "workspace":
             yield event.plain_result(
                 f"💻 本群模式已切换为【模拟工作区】！\n\n"
@@ -389,8 +389,8 @@ class XbdocCommandsMixin:
             yield event.plain_result("用法：/doc prompt_set <本群专属提示词内容>，至少2个字。")
             return
         with self._save_lock:
-            key = self._writer_key(event)
-            self.set_session_prompt(key, text, event)
+            key, _ = self._resolve_session(event, create=False)
+            self.set_session_prompt(key, text)
         yield event.plain_result(
             f"✅【本群专属提示词已生效】\n"
             f"会话标识：{key}\n"
@@ -430,13 +430,13 @@ class XbdocCommandsMixin:
         """本群屏蔽 AstrBot 原人格开关 /doc shield on|off（管理员）"""
         raw = " ".join(args)
         with self._save_lock:
-            key = self._writer_key(event)
+            key, _ = self._resolve_session(event, create=False)
             cur_shield = bool((self._bindings.get(key) or {}).get("shield", False))
             target = self._parse_on_off(raw, cur_shield)
             if target is None:
                 msg = "❌ 用法错误：/doc shield on（开启） | off（关闭）"
             else:
-                ent = self._get_entry(key, event)
+                ent = self._get_entry(key)
                 ent["shield"] = bool(target)
                 self._prune_empty_entry(key)
                 self._save_json(self.bindings_path, self._bindings)
@@ -451,13 +451,13 @@ class XbdocCommandsMixin:
         """切换强制注入系统提示词开关 /doc force on|off（管理员）"""
         raw = " ".join(args)
         with self._save_lock:
-            key = self._writer_key(event)
+            key, _ = self._resolve_session(event, create=False)
             cur = bool((self._bindings.get(key) or {}).get("force_system_prompt", False))
             target = self._parse_on_off(raw, cur)
             if target is None:
                 msg = "用法：/doc force on (开启强制注入) | off (关闭)"
             else:
-                ent = self._get_entry(key, event)
+                ent = self._get_entry(key)
                 ent["force_system_prompt"] = bool(target)
                 self._prune_empty_entry(key)
                 self._save_json(self.bindings_path, self._bindings)
@@ -472,7 +472,7 @@ class XbdocCommandsMixin:
         """清空历史记忆并停止读取此指令之前的消息 /doc no [off]"""
         raw = " ".join(args).strip().lower()
         with self._save_lock:
-            key = self._writer_key(event)
+            key, _ = self._resolve_session(event, create=False)
             if raw in ("off", "恢复", "false", "0", "no_off", "reset", "yes"):
                 ent = self._bindings.get(key)
                 if ent:
@@ -481,7 +481,7 @@ class XbdocCommandsMixin:
                 logger.info(f"[{PLUGIN_NAME}] [doc no] 恢复历史读取 (会话: {key})")
                 msg = f"✅ 已恢复读取历史消息上下文（会话：{key}）。"
             else:
-                ent = self._get_entry(key, event)
+                ent = self._get_entry(key)
                 ent["ignore_history"] = True
                 self._save_json(self.bindings_path, self._bindings)
                 logger.info(f"[{PLUGIN_NAME}] [doc no] 清空历史记忆 (会话: {key})")

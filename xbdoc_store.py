@@ -40,7 +40,6 @@ except ImportError:
     )
 
 PLUGIN_NAME = "astrbot_plugin_xbdoc"
-OLD_PLUGIN_NAMES = ("xbdoc", "astrbot_plugin_doc_memory")
 
 # 配置唯一来源：与 _conf_schema.json 默认值保持一致，__init__ 不做快照
 CONFIG_DEFAULTS: Dict[str, Any] = {
@@ -100,11 +99,11 @@ class XbdocStoreMixin:
         except Exception:
             pass
 
-        # 加载并自动标准化数据（seen 先行，供绑定做平台限定迁移；有变才回写）
+        # 加载并自动标准化数据（有变才回写，避免每次启动空转 I/O）
         self._index: Dict[str, Dict[str, Any]] = self._load_json(self.index_path, {})
         self._seen_groups: Dict[str, Dict[str, Any]] = self._load_json(self.seen_path, {})
         _raw_bindings = self._load_json(self.bindings_path, {})
-        self._bindings: Dict[str, Dict[str, Any]] = self._normalize_bindings(_raw_bindings, self._seen_groups)
+        self._bindings: Dict[str, Dict[str, Any]] = self._normalize_bindings(_raw_bindings)
         if self._bindings != _raw_bindings and self.bindings_path.exists():
             self._save_json(self.bindings_path, self._bindings)
 
@@ -118,40 +117,9 @@ class XbdocStoreMixin:
 
     # ---------- 路径与持久化 ----------
     def _resolve_data_dir(self) -> Path:
-        # 新插件名优先；若旧目录存在则自动迁移，保证改名不丢数据
         if _HAS_DATA_PATH:
             try:
-                base = Path(get_astrbot_data_path()) / "plugin_data"
-                new_p = base / PLUGIN_NAME
-                if not new_p.exists():
-                    # 多个旧目录并存时选最近使用过的迁移，其余仅告警不碰
-                    legacy_dirs = [base / n for n in OLD_PLUGIN_NAMES if (base / n).exists()]
-
-                    def _mtime(p: Path) -> float:
-                        try:
-                            b = p / "bindings.json"
-                            return b.stat().st_mtime if b.exists() else p.stat().st_mtime
-                        except Exception:
-                            return 0.0
-
-                    legacy_dirs.sort(key=_mtime, reverse=True)
-                    for idx, old_p in enumerate(legacy_dirs):
-                        if idx > 0:
-                            logger.warning(f"[{PLUGIN_NAME}] 发现多余旧数据目录未迁移: {old_p}")
-                            continue
-                        try:
-                            import shutil
-                            try:
-                                # 首选移动：不占双份空间，且删新目录后不会再被复活
-                                shutil.move(str(old_p), str(new_p))
-                            except Exception:
-                                shutil.copytree(old_p, new_p)
-                            logger.info(f"[{PLUGIN_NAME}] 已从旧数据目录迁移: {old_p} -> {new_p}")
-                        except Exception as e:
-                            logger.warning(f"[{PLUGIN_NAME}] 数据迁移失败，将直接使用旧目录: {e}")
-                            return old_p
-                        break
-                return new_p
+                return Path(get_astrbot_data_path()) / "plugin_data" / PLUGIN_NAME
             except Exception:
                 pass
         _plug_root = Path(__file__).resolve().parent
@@ -535,14 +503,10 @@ class XbdocStoreMixin:
         s = str(k or "").strip()
         if not s:
             return ""
-        # 新规范 kind:platform:ident 直接透传（platform 段不改写，只 strip；
-        # 排除 group:group:x / private:private:x 这类双重前缀脏数据，继续走下方清洗）
+        # 新规范 kind:platform:ident 直接透传
         kind, plat, ident = XbdocStoreMixin._split_session_key(s)
-        if kind and plat and ident and plat.lower() != kind:
+        if kind and plat and ident:
             return f"{kind}:{plat}:{ident}"
-        # 兼容 group:group:123 这类双重前缀脏数据
-        while s.lower().startswith("group:group:"):
-            s = s[6:]
         if s.lower().startswith("group:"):
             tail = s.split(":", 1)[1].strip()
             return f"group:{tail}" if tail else ""
@@ -604,47 +568,25 @@ class XbdocStoreMixin:
         return ck or "default"
 
 
-    def _normalize_bindings(self, raw: Dict[str, Any], seen: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, Any]]:
-        """标准化并自动合并同一会话的历史 Key。
-
-        seen 传入时做启动迁移：老格式（无平台段）且被 seen 单一平台认领 -> 限定 key；
-        多认领/无认领保持原样，运行时靠回落 + 写时接管自愈。
-        """
+    def _normalize_bindings(self, raw: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+        """标准化绑定：key 归一、模式归一，同 key 条目确定性合并。"""
         out: Dict[str, Dict[str, Any]] = {}
         if not isinstance(raw, dict):
             return out
         for k, v in raw.items():
             ck = self._canonical_key_str(str(k))
-            if not ck:
+            if not ck or not isinstance(v, dict):
                 continue
-            if isinstance(v, list):
-                doc_ids = [str(i) for i in v]
-                prompt = ""
-                shield = False
-                mode = "reference"
-                force_sys = False
-                extra: Dict[str, Any] = {}
-            elif isinstance(v, dict):
-                doc_ids = [str(i) for i in (v.get("doc_ids") or [])]
-                prompt = str(v.get("prompt") or "").strip()
-                shield = bool(v.get("shield", False))
-                force_sys = bool(v.get("force_system_prompt", False))
-                mode = self._normalize_mode(v.get("mode")) or "reference"
+            new_ent = {
+                "doc_ids": [str(i) for i in (v.get("doc_ids") or [])],
+                "prompt": str(v.get("prompt") or "").strip(),
+                "shield": bool(v.get("shield", False)),
+                "mode": self._normalize_mode(v.get("mode")) or "reference",
+                "force_system_prompt": bool(v.get("force_system_prompt", False)),
                 # 保留未知字段（如 ignore_history），避免打开WebUI就丢配置
-                extra = {kk: vv for kk, vv in v.items() if kk not in (
-                    "doc_ids", "prompt", "shield", "mode", "force_system_prompt")}
-            else:
-                continue
-
-            if seen:
-                kind, plat, ident = self._split_session_key(ck)
-                if kind and not plat and ident:
-                    plats = self._seen_platforms(kind, ident, seen)
-                    if len(plats) == 1:
-                        ck = f"{kind}:{plats.pop()}:{ident}"
-
-            new_ent = {"doc_ids": doc_ids, "prompt": prompt, "shield": shield,
-                       "mode": mode, "force_system_prompt": force_sys, **extra}
+                **{kk: vv for kk, vv in v.items() if kk not in (
+                    "doc_ids", "prompt", "shield", "mode", "force_system_prompt")},
+            }
             if ck not in out:
                 out[ck] = new_ent
             else:
@@ -673,10 +615,6 @@ class XbdocStoreMixin:
     def _session_keys(self, event: AstrMessageEvent) -> List[str]:
         ck = self._canonical_key(event)
         keys = [ck]
-        # 迁移兼容：新 key 未命中时回落老格式（老数据无平台段，不断连）
-        legacy = self._legacy_key(ck)
-        if legacy and legacy != ck:
-            keys.append(legacy)
         umo = str(getattr(event, "unified_msg_origin", "") or "").strip()
         for cand in (umo, self._canonical_key_str(umo)):
             if cand and cand not in keys:
@@ -685,16 +623,8 @@ class XbdocStoreMixin:
 
 
     @staticmethod
-    def _legacy_key(cks: str) -> str:
-        """限定 key 去平台段（group:plat:gid -> group:gid），供老数据回落；老格式原样返回。"""
-        kind, plat, ident = XbdocStoreMixin._split_session_key(cks)
-        if kind and plat and ident:
-            return f"{kind}:{ident}"
-        return cks
-
-    @staticmethod
     def _merge_entries(cur: Dict[str, Any], old: Dict[str, Any]) -> Dict[str, Any]:
-        """同会话两条目合并（normalize 与接管共用）：doc 并集保序，开关取或，模式按强度。"""
+        """同会话两条目合并（加载时去重用）：doc 并集保序，开关取或，模式按强度。"""
         merged_ids = list(cur.get("doc_ids", []))
         for d in old.get("doc_ids", []):
             if d not in merged_ids:
@@ -716,53 +646,6 @@ class XbdocStoreMixin:
                 cur.setdefault(kk, vv)
         return cur
 
-    def _prefer_qualified(self, key: str, event: Any = None) -> str:
-        """老格式 key + 事件带平台 -> 限定候选；否则原样（是否接管由 _adopt_legacy 判定）。"""
-        kind, plat, ident = self._split_session_key(key)
-        if not kind or plat or not ident:
-            return key
-        if event is None:
-            return key
-        eplat = self._platform_of(event)
-        if eplat:
-            return f"{kind}:{eplat}:{ident}"
-        return key
-
-    def _adopt_legacy(self, qualified_key: str, event_platform: str = "") -> str:
-        """限定 key 接管同 id 老条目（合并后删老 key）。调用方需持 self._save_lock。
-
-        老条目已记录平台且与限定平台冲突时不合并（疑似不同会话），仅打日志。
-        """
-        kind, plat, ident = self._split_session_key(qualified_key)
-        if not kind or not plat or not ident:
-            return qualified_key
-        legacy = f"{kind}:{ident}"
-        old = self._bindings.get(legacy)
-        if not old or legacy == qualified_key:
-            return qualified_key
-        old_plat = str(old.get("platform") or "").strip()
-        if old_plat and old_plat != plat and old_plat != (event_platform or "").strip():
-            logger.warning(
-                f"[{PLUGIN_NAME}] 会话 {legacy} 已归属平台 {old_plat}，"
-                f"不并入 {qualified_key}（疑似跨平台同号），请手动确认绑定。"
-            )
-            return qualified_key
-        cur = self._bindings.get(qualified_key)
-        if cur is None:
-            self._bindings[qualified_key] = old
-        else:
-            self._merge_entries(cur, old)
-        self._bindings.pop(legacy, None)
-        self._prune_empty_entry(qualified_key)
-        logger.info(f"[{PLUGIN_NAME}] 会话已迁移 {legacy} -> {qualified_key}")
-        return qualified_key
-
-    def _writer_key(self, event: AstrMessageEvent) -> str:
-        """写路径统一 key：解析命中 -> 平台限定 -> 接管老条目。调用方需持 self._save_lock。"""
-        key, _ = self._resolve_session(event, create=False)
-        key = self._adopt_legacy(self._prefer_qualified(key, event), self._platform_of(event))
-        return key
-
     def _qualify_session_key(self, raw_key: str) -> str:
         """WebUI 手填 key 补平台限定：已限定原样；老格式按 seen 单一认领补足，多认领/无认领原样返回。"""
         ck = self._canonical_key_str(raw_key)
@@ -781,17 +664,11 @@ class XbdocStoreMixin:
             )
         return ck
 
-    def _get_entry(self, session_key: str, event: Any = None) -> Dict[str, Any]:
-        """取（无则建）会话条目；有 event 时顺手记录平台（纯元数据展示用，不参与 key）。"""
+    def _get_entry(self, session_key: str) -> Dict[str, Any]:
         ck = self._canonical_key_str(session_key)
-        ent = self._bindings.setdefault(ck, {
+        return self._bindings.setdefault(ck, {
             "doc_ids": [], "prompt": "", "shield": False, "mode": "reference", "force_system_prompt": False,
         })
-        if event is not None:
-            plat = self._platform_of(event)
-            if plat and not ent.get("platform"):
-                ent["platform"] = plat
-        return ent
 
 
     def _resolve_session(self, event_or_key: Any, create: bool = False) -> Tuple[str, Dict[str, Any]]:
@@ -888,10 +765,10 @@ class XbdocStoreMixin:
 
 
     @_locked
-    def bind_docs(self, session_key: str, doc_ids: List[str], event: Any = None) -> List[str]:
+    def bind_docs(self, session_key: str, doc_ids: List[str]) -> List[str]:
         """只改内存不落盘，调用方统一 save（避免一次绑定写两次文件）。"""
         valid = [d for d in doc_ids if d in self._index]
-        self._get_entry(session_key, event)["doc_ids"] = valid
+        self._get_entry(session_key)["doc_ids"] = valid
         return valid
 
 
@@ -918,17 +795,17 @@ class XbdocStoreMixin:
 
 
     @_locked
-    def set_session_prompt(self, session_key: str, prompt: str, event: Any = None) -> Dict[str, Any]:
-        ent = self._get_entry(session_key, event)
+    def set_session_prompt(self, session_key: str, prompt: str) -> Dict[str, Any]:
+        ent = self._get_entry(session_key)
         ent["prompt"] = (prompt or "").strip()
         self._save_json(self.bindings_path, self._bindings)
         return ent
 
 
     @_locked
-    def set_session_mode(self, session_key: str, mode: str, event: Any = None) -> Dict[str, Any]:
+    def set_session_mode(self, session_key: str, mode: str) -> Dict[str, Any]:
         # 文档生效模式必须有绑定文档才能切换，无文档时强制回落 reference
-        ent = self._get_entry(session_key, event)
+        ent = self._get_entry(session_key)
         if not [d for d in ent.get("doc_ids", []) if d in self._index]:
             ent["mode"] = "reference"
             self._save_json(self.bindings_path, self._bindings)
