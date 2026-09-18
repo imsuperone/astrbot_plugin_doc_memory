@@ -484,6 +484,27 @@ def test_export_import_roundtrip():
     assert "error" in asyncio.run(p2._api_import_bindings())
 
 
+def test_platform_object_extraction():
+    import xbdoc_store as S
+    pf = S.XbdocStoreMixin._platform_of
+    # PlatformMetadata 对象取 .name，绝不 str() 整个对象进 key
+    meta = SimpleNamespace(name="aiocqhttp", description="x", id="default")
+    ev = SimpleNamespace(platform_id=meta, platform="", unified_msg_origin="")
+    assert pf(ev) == "aiocqhttp", pf(ev)
+    # 无 name 的对象跳过，继续找下一个来源
+    ev2 = SimpleNamespace(platform_id=SimpleNamespace(), platform="tg", unified_msg_origin="")
+    assert pf(ev2) == "tg"
+    # 全是垃圾时返回空串，不产出 repr 残骸
+    ev3 = SimpleNamespace(platform_id=SimpleNamespace(), platform="", unified_msg_origin="")
+    assert pf(ev3) == ""
+    # 端到端：对象平台参与 key 限定
+    p, _ = _make_plugin()
+    ev4 = _fake_event(gid="753700701", umo="")
+    ev4.platform_id = meta
+    ev4.platform = ""
+    assert p._canonical_key(ev4) == "group:aiocqhttp:753700701"
+
+
 if __name__ == "__main__":
     test_mro()
     test_config_defaults_in_sync()
@@ -502,4 +523,5 @@ if __name__ == "__main__":
     test_cross_platform_isolation()
     test_qualify_session_key()
     test_export_import_roundtrip()
+    test_platform_object_extraction()
     print("test_plugin PASSED")

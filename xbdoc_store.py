@@ -191,6 +191,23 @@ class XbdocStoreMixin:
 
 
     @staticmethod
+    def _clean_platform(v: Any) -> str:
+        """平台名清洗：字符串直接用；PlatformMetadata 之类对象取 .name；其他一律丢弃。
+
+        绝不 str() 整个对象——那会产生 PlatformMetadata(name=...) 这种垃圾 key。
+        """
+        if isinstance(v, str):
+            cand = v.strip()
+        elif v is None:
+            return ""
+        else:
+            name = getattr(v, "name", None)
+            cand = name.strip() if isinstance(name, str) else ""
+        if not cand or len(cand) > 32 or not re.match(r"^[A-Za-z0-9_\-]+$", cand):
+            return ""
+        return cand
+
+    @staticmethod
     def _platform_of(event: Any) -> str:
         """提取事件所属平台（onebot/telegram/...），取不到返回空串，不抛异常。"""
         try:
@@ -198,16 +215,30 @@ class XbdocStoreMixin:
             gpn = getattr(event, "get_platform_name", None)
             if callable(gpn):
                 try:
-                    pn = str(gpn() or "").strip()
+                    pn = XbdocStoreMixin._clean_platform(gpn())
                     if pn:
                         return pn
                 except Exception:
                     pass
-            platform = str(getattr(event, "platform_id", "") or getattr(event, "platform", "") or "")
-            if not platform:
-                umo = getattr(event, "unified_msg_origin", "") or ""
-                platform = umo.split(":", 1)[0] if ":" in umo else ""
-            return platform.strip()
+            for attr in ("platform_id", "platform"):
+                try:
+                    pn = XbdocStoreMixin._clean_platform(getattr(event, attr, ""))
+                except Exception:
+                    continue
+                if pn:
+                    return pn
+            try:
+                msg_obj = getattr(event, "message_obj", None)
+                pn = XbdocStoreMixin._clean_platform(
+                    getattr(msg_obj, "platform_id", "") or getattr(msg_obj, "platform", ""))
+                if pn:
+                    return pn
+            except Exception:
+                pass
+            umo = getattr(event, "unified_msg_origin", "") or ""
+            if isinstance(umo, str) and ":" in umo:
+                return XbdocStoreMixin._clean_platform(umo.split(":", 1)[0])
+            return ""
         except Exception:
             return ""
 
