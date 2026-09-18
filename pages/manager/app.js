@@ -558,7 +558,7 @@
 
     const promptEl = $("bindPrompt");
     if (promptEl) {
-      promptEl.addEventListener("input", () => { promptDirty = true; });
+      promptEl.addEventListener("input", () => { promptDirty = true; updatePromptCount(); });
     }
 
     input.addEventListener("input", () => {
@@ -595,6 +595,15 @@
     });
   }
 
+  // ---- Prompt Char Counter (live count next to the textarea) ----
+  function updatePromptCount() {
+    const box = $("bindPrompt");
+    const label = $("promptCharCount");
+    if (!box || !label) return;
+    const n = (box.value || "").length;
+    label.textContent = n > 0 ? `已输入 ${n} 字` : "";
+  }
+
   function loadExistingSessionSettings(key) {
     const entry = bindingsMap[key];
     loadedSessionKey = key || "";
@@ -608,6 +617,7 @@
 
     const promptEl = $("bindPrompt");
     if (promptEl) promptEl.value = entry.prompt || "";
+    updatePromptCount();
 
     const shieldVal = entry.shield ? "on" : "off";
     setShieldChoice(shieldVal);
@@ -711,6 +721,7 @@
         if (bp) bp.value = "";
         loadedSessionKey = "";
         promptDirty = false;
+        updatePromptCount();
         selectedDocIds.clear();
         renderDocChips();
         setShieldChoice("off");
@@ -855,7 +866,7 @@
               ${docs.length ? docs.map((d) => `<span class="doc-tag">${esc(d.filename || d.doc_id || d)}</span>`).join("") : '<span class="helper">无绑定文档</span>'}
               ${raw.force_system_prompt ? '<span class="badge-pill" style="background:#fee2e2; color:#991b1b; font-weight:700; border:1px solid #f87171;">⚡ 强制唯一系统词</span>' : ''}
               <span class="badge-pill ${shieldClass}">${esc(shieldTag)}</span>
-              ${prompt ? '<span class="badge-pill" style="background:var(--md-sys-color-tertiary-container); color:var(--md-sys-color-on-tertiary-container);">🏷️ 专属提示词</span>' : ''}
+              ${prompt ? `<span class="badge-pill" style="background:var(--md-sys-color-tertiary-container); color:var(--md-sys-color-on-tertiary-container);">🏷️ 专属提示词（${prompt.length}字）</span>` : ''}
             </div>
             <div class="mode-select-row">
               <span style="font-size:12px; font-weight:600; color:var(--md-sys-color-outline); margin-right:4px;">生效模式:</span>
@@ -1125,6 +1136,7 @@
     initBindingListEvents();
     initReaderEvents();
     initRefreshButton();
+    updatePromptCount();
 
     // 2. Connect with bridge if available
     try {
