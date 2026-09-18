@@ -41,6 +41,42 @@ except ImportError:
 # 插件主体（入口 + LLM 检索注入链路；存储/指令/WebAPI 见各 mixin 模块）
 # ======================================================================
 
+# 模块级指令去重表：同一进程重复加载插件时也能共享，专治适配器重复投递/消息回显导致同一条指令执行两次
+_CMD_SEEN: Dict[str, float] = {}
+
+
+def _is_dup_command(event: AstrMessageEvent, sub: str, sub_args: List[str]) -> bool:
+    """同一条指令消息是否已处理过。True=重复投递应跳过；否则记录并返回 False。"""
+    try:
+        now = time.time()
+        if len(_CMD_SEEN) > 500:  # 顺手清理过期条目，避免无限增长
+            cutoff = now - 120.0
+            for k in [k for k, ts in _CMD_SEEN.items() if ts < cutoff]:
+                _CMD_SEEN.pop(k, None)
+        keys = []
+        try:
+            mid = getattr(getattr(event, "message_obj", None), "message_id", None)
+        except Exception:
+            mid = None
+        if mid is not None and str(mid).strip():
+            keys.append((f"mid:{mid}", 120.0))
+        try:
+            gid = str(event.get_group_id() or "").strip()
+            sess = f"group:{gid}" if gid else str(getattr(event, "unified_msg_origin", "") or "")
+        except Exception:
+            sess = ""
+        keys.append((f"cmd:{sess}:{sub}:{' '.join(sub_args)}", 5.0))
+        for key, window in keys:
+            ts = _CMD_SEEN.get(key)
+            if ts is not None and (now - ts) < window:
+                return True
+        for key, _ in keys:
+            _CMD_SEEN[key] = now
+        return False
+    except Exception:
+        return False
+
+
 class XbdocPlugin(XbdocStoreMixin, XbdocCommandsMixin, XbdocWebAPIMixin, Star):
 
     def __init__(self, context: Context, config: Optional[Dict[str, Any]] = None):
@@ -345,6 +381,11 @@ class XbdocPlugin(XbdocStoreMixin, XbdocCommandsMixin, XbdocWebAPIMixin, Star):
         tokens = [t for t in re.split(r"\s+", raw) if t]
         sub = tokens[1].lower() if len(tokens) > 1 else ""
         sub_args = tokens[2:] if len(tokens) > 2 else []
+
+        # 去重：同一条指令消息重复投递只执行一次（偶发双提醒的根治）
+        if _is_dup_command(event, sub, sub_args):
+            logger.info(f"[{PLUGIN_NAME}] [去重] 跳过重复投递的指令: /doc {sub}")
+            return
 
         if not sub or sub in ("help", "h", "?", "帮助", "菜单"):
             async for res in self._cmd_help(event):

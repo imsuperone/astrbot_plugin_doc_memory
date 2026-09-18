@@ -73,7 +73,14 @@ async def _collect(agen):
     return [x async for x in agen]
 
 
-def _fake_event(gid="", umo="", text="", uid="999", gname="测试群", nickname="测试昵称"):
+def _fake_event(gid="", umo="", text="", uid="999", gname="测试群", nickname="测试昵称",
+                mid=""):
+    msg_obj = SimpleNamespace(
+        sender=SimpleNamespace(user_id=uid, nickname=nickname),
+        group=SimpleNamespace(group_name=gname),
+    )
+    if mid:
+        msg_obj.message_id = mid
     return SimpleNamespace(
         get_group_id=lambda: gid,
         unified_msg_origin=umo,
@@ -81,10 +88,7 @@ def _fake_event(gid="", umo="", text="", uid="999", gname="测试群", nickname=
         is_admin=lambda: True,
         platform_id="",
         platform="",
-        message_obj=SimpleNamespace(
-            sender=SimpleNamespace(user_id=uid, nickname=nickname),
-            group=SimpleNamespace(group_name=gname),
-        ),
+        message_obj=msg_obj,
         plain_result=lambda s: s,
     )
 
@@ -326,6 +330,48 @@ def test_inject_docs_splice_and_perf():
         assert "你是助理" in req.system_prompt, req.system_prompt
 
 
+def test_cmd_dedup():
+    import tempfile as tf
+    from threading import Lock
+    p, _ = _make_plugin()
+    d = Path(tf.mkdtemp(prefix="xbdoc_t7_"))
+    p.data_dir = d
+    p.docs_dir = d / "docs"
+    p.docs_dir.mkdir(parents=True, exist_ok=True)
+    p.index_path = d / "index.json"
+    p.bindings_path = d / "bindings.json"
+    p.seen_path = d / "seen_groups.json"
+    p._save_lock = Lock()
+    p._index = {}
+    p._bindings = {}
+    p._chunk_cache = {}
+    p._chunk_tokens_cache = {}
+    p._fulltext_cache = {}
+    p._bm25_cache = {}
+    p._seen_groups = {}
+    p._seen_save_ts = 0
+    p.config = {}
+    M._CMD_SEEN.clear()
+
+    # 同一 message_id 投递两次：第二次零输出
+    ev1 = _fake_event(gid="123", umo="Group:123", text="/doc no", mid="dup-m1")
+    out1 = asyncio.run(_collect(p.doc_cmd(ev1)))
+    assert len(out1) == 1 and "已清空" in out1[0], out1
+    ev2 = _fake_event(gid="123", umo="Group:123", text="/doc no", mid="dup-m1")
+    out2 = asyncio.run(_collect(p.doc_cmd(ev2)))
+    assert out2 == [], out2
+
+    # 不同 message_id 但 5 秒内同指令同参数：同样去重
+    ev3 = _fake_event(gid="123", umo="Group:123", text="/doc no", mid="dup-m2")
+    assert asyncio.run(_collect(p.doc_cmd(ev3))) == []
+
+    # 不同指令不受影响
+    ev4 = _fake_event(gid="123", umo="Group:123", text="/doc status", mid="dup-m3")
+    out4 = asyncio.run(_collect(p.doc_cmd(ev4)))
+    assert len(out4) == 1, out4
+    M._CMD_SEEN.clear()
+
+
 if __name__ == "__main__":
     test_mro()
     test_init_store_normalize_and_tmp_cleanup()
@@ -335,4 +381,5 @@ if __name__ == "__main__":
     test_private_seen_and_list()
     test_prompt_no_limit()
     test_inject_docs_splice_and_perf()
+    test_cmd_dedup()
     print("test_plugin PASSED")
