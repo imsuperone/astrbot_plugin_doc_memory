@@ -194,6 +194,15 @@ class XbdocStoreMixin:
     def _platform_of(event: Any) -> str:
         """提取事件所属平台（onebot/telegram/...），取不到返回空串，不抛异常。"""
         try:
+            # 官方 API 优先（新版 AstrBot 事件自带 get_platform_name）
+            gpn = getattr(event, "get_platform_name", None)
+            if callable(gpn):
+                try:
+                    pn = str(gpn() or "").strip()
+                    if pn:
+                        return pn
+                except Exception:
+                    pass
             platform = str(getattr(event, "platform_id", "") or getattr(event, "platform", "") or "")
             if not platform:
                 umo = getattr(event, "unified_msg_origin", "") or ""
@@ -206,6 +215,12 @@ class XbdocStoreMixin:
         """记录会话基础信息，供 WebUI 模糊搜索/绑定选用（群聊与私聊通用）。"""
         try:
             platform = self._platform_of(event)
+            if not platform and not getattr(self, "_platform_warned", False):
+                self._platform_warned = True
+                logger.warning(
+                    f"[{PLUGIN_NAME}] 事件中取不到平台名，会话 key 将回落为无平台格式；"
+                    f"请确认 AstrBot 版本/适配器是否上报平台信息。"
+                )
 
             gid = str(event.get_group_id() or "").strip()
             if not gid:
