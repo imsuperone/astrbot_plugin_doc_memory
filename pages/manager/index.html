@@ -149,7 +149,7 @@
           <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
             <label class="form-label" for="sessionKey" style="margin-bottom:0;">
               目标会话标识 (Session Key)
-              <span class="helper">支持搜索群名称/群号，或直接输入 group:123456</span>
+              <span class="helper">支持搜索群名称/群号/私聊昵称，或直接输入 group:123456 / private:UID</span>
             </label>
             <button id="fetchBotGroupsBtn" class="m3-btn m3-btn-tonal m3-btn-sm" type="button" title="向机器人适配器主动拉取已加入的群聊">
               <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
@@ -159,7 +159,7 @@
             </button>
           </div>
           <div style="position:relative;">
-            <input type="text" id="sessionKey" class="m3-field" placeholder="点击查看群列表，或输入群号/群名称筛选…" autocomplete="off" />
+            <input type="text" id="sessionKey" class="m3-field" placeholder="点击查看群/私聊列表，或输入群号/昵称/UID 筛选…" autocomplete="off" />
             <div id="suggestDropdown" class="suggest-dropdown">
               <!-- Auto-suggest items -->
             </div>
@@ -283,8 +283,9 @@
                 </div>
                 <div class="cmd-group">
                   <div class="cmd-group-title">🔗 绑定</div>
-                  <div class="cmd-row"><code class="mono">/doc bind &lt;ID...&gt;</code><span>追加绑定，自动合并</span></div>
+                  <div class="cmd-row"><code class="mono">/doc bind &lt;ID...&gt;</code><span>追加绑定，自动合并（私聊里直接对自己用即可）</span></div>
                   <div class="cmd-row"><code class="mono">/doc unbind [ID...]</code><span>解绑；留空全清，提示词一并清除</span></div>
+                  <div class="cmd-row"><code class="mono">私聊绑定</code><span>和机器人私聊任意一句即被记录，WebUI 搜昵称/UID 绑定，或手填 private:UID</span></div>
                 </div>
                 <div class="cmd-group">
                   <div class="cmd-group-title">🎛️ 模式（需先绑定文档）</div>

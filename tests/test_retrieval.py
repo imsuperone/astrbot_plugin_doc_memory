@@ -70,6 +70,8 @@ def test_truncate():
     assert truncate_text("abc", 10) == "abc"
     assert truncate_text("a" * 100, 10) == "a" * 10  # 过小上限只截不断言标记
     assert truncate_text("a" * 1000, 600).endswith("…(截断)")
+    assert truncate_text("a" * 9000, 0) == "a" * 9000  # 0=不限制，完整注入
+    assert truncate_text("a" * 9000, -5) == "a" * 9000
     # 专属提示词永不截断：build 段階只截文档部分
     out = build_system_text(["a" * 1000], "PROMPT", 600)
     assert "PROMPT" in out and out.endswith("PROMPT")

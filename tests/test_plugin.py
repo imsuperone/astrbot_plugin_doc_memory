@@ -73,7 +73,7 @@ async def _collect(agen):
     return [x async for x in agen]
 
 
-def _fake_event(gid="", umo="", text="", uid="999", gname="测试群"):
+def _fake_event(gid="", umo="", text="", uid="999", gname="测试群", nickname="测试昵称"):
     return SimpleNamespace(
         get_group_id=lambda: gid,
         unified_msg_origin=umo,
@@ -82,7 +82,7 @@ def _fake_event(gid="", umo="", text="", uid="999", gname="测试群"):
         platform_id="",
         platform="",
         message_obj=SimpleNamespace(
-            sender=SimpleNamespace(user_id=uid),
+            sender=SimpleNamespace(user_id=uid, nickname=nickname),
             group=SimpleNamespace(group_name=gname),
         ),
         plain_result=lambda s: s,
@@ -208,10 +208,94 @@ def test_bind_status_unbind_flow():
     assert list(p._bindings.keys()) == ["xxx:123"], p._bindings.keys()
 
 
+def test_private_seen_and_list():
+    import tempfile as tf
+    from threading import Lock
+    p, _ = _make_plugin()
+    d = Path(tf.mkdtemp(prefix="xbdoc_t4_"))
+    p.data_dir = d
+    p.docs_dir = d / "docs"
+    p.docs_dir.mkdir(parents=True, exist_ok=True)
+    p.index_path = d / "index.json"
+    p.bindings_path = d / "bindings.json"
+    p.seen_path = d / "seen_groups.json"
+    p._save_lock = Lock()
+    p._seen_groups = {}
+    p._seen_save_ts = 0
+    p._bindings = {}
+    p._index = {}
+    p._chunk_cache = {}
+    p._chunk_tokens_cache = {}
+    p._fulltext_cache = {}
+    p._bm25_cache = {}
+    p.config = {}
+
+    # 私聊来一条消息即被记录（含昵称），key 为 private:uid
+    p._record_seen_group(_fake_event(gid="", umo="", uid="777888", nickname="阿茶"))
+    assert "private:777888" in p._seen_groups, p._seen_groups.keys()
+    assert p._seen_groups["private:777888"]["group_name"] == "阿茶"
+
+    # 列表里能选到：kind/session_key/display 齐全
+    groups = p._get_all_merged_groups("", 60)
+    priv = [g for g in groups if g.get("kind") == "private"]
+    assert len(priv) == 1 and priv[0]["session_key"] == "private:777888", groups
+    assert priv[0]["display"] == "阿茶" and priv[0]["bound"] is False
+
+    # 无记录的私聊绑定同样列出（空壳、bound=True）
+    p._bindings = {"private:999000": dict(doc_ids=[], prompt="hi", shield=False,
+                   mode="reference", force_system_prompt=False)}
+    groups = p._get_all_merged_groups("", 60)
+    shell = [g for g in groups if g.get("session_key") == "private:999000"]
+    assert len(shell) == 1 and shell[0]["bound"] is True
+
+    # 绑定后 bound 置 true；搜昵称/UID 能命中
+    p._bindings["private:777888"] = dict(doc_ids=[], prompt="", shield=False,
+                                         mode="reference", force_system_prompt=False)
+    groups = p._get_all_merged_groups("阿茶", 60)
+    assert any(g.get("session_key") == "private:777888" for g in groups)
+    groups = p._get_all_merged_groups("777888", 60)
+    assert any(g.get("session_key") == "private:777888" for g in groups)
+
+    # 私聊注入链路：绑定文档后 effective 解析走 private key
+    meta = p.add_document("p.md", "私聊专属内容 apple".encode("utf-8"))
+    p._bindings["private:777888"]["doc_ids"] = [meta["doc_id"]]
+    sess = p._effective_session(_fake_event(gid="", umo="", uid="777888"))
+    assert sess["matched_key"] == "private:777888" and sess["doc_ids"] == [meta["doc_id"]]
+
+
+def test_prompt_no_limit():
+    import tempfile as tf
+    from threading import Lock
+    p, _ = _make_plugin()
+    d = Path(tf.mkdtemp(prefix="xbdoc_t5_"))
+    p.data_dir = d
+    p.docs_dir = d / "docs"
+    p.docs_dir.mkdir(parents=True, exist_ok=True)
+    p.index_path = d / "index.json"
+    p.bindings_path = d / "bindings.json"
+    p.seen_path = d / "seen_groups.json"
+    p._save_lock = Lock()
+    p._bindings = {}
+    p._index = {}
+
+    # 5000 字提示词不再被拒，且完整落盘
+    long_text = "x" * 5000
+    out = asyncio.run(_collect(p.doc_prompt_set(
+        _fake_event(gid="", umo="", text="/doc prompt_set " + long_text))))
+    assert "已生效" in out[0] and "超出" not in out[0], out[0][:100]
+    assert p._bindings["private:999"]["prompt"] == long_text
+
+    # 注入侧 0=不限制：超长文档全量进系统词
+    from xbdoc_inject import build_system_text
+    assert build_system_text(["a" * 9000], "PP", 0) == "a" * 9000 + "\n\nPP"
+
+
 if __name__ == "__main__":
     test_mro()
     test_init_store_normalize_and_tmp_cleanup()
     test_doc_retrieve_fulltext()
     test_resolve_session()
     test_bind_status_unbind_flow()
+    test_private_seen_and_list()
+    test_prompt_no_limit()
     print("test_plugin PASSED")

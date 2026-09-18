@@ -204,15 +204,17 @@ class XbdocStoreMixin:
 
 
     def _record_seen_group(self, event: AstrMessageEvent) -> None:
-        """记录群聊基础信息，供 WebUI 模糊搜索使用。"""
+        """记录会话基础信息，供 WebUI 模糊搜索/绑定选用（群聊与私聊通用）。"""
         try:
-            gid = str(event.get_group_id() or "").strip()
-            if not gid:
-                return
             platform = str(getattr(event, "platform_id", "") or getattr(event, "platform", "") or "")
             if not platform:
                 umo = getattr(event, "unified_msg_origin", "") or ""
                 platform = umo.split(":", 1)[0] if ":" in umo else ""
+
+            gid = str(event.get_group_id() or "").strip()
+            if not gid:
+                self._record_seen_private(event, platform)
+                return
 
             group_name = ""
             grp = getattr(event.message_obj, "group", None)
@@ -222,12 +224,61 @@ class XbdocStoreMixin:
             now = int(time.time())
             ent = self._seen_groups.setdefault(gid, {
                 "gid": gid, "group_name": group_name, "platform": platform,
+                "kind": "group",
                 "first_seen": now, "last_seen": now, "msg_count": 0,
             })
             ent["last_seen"] = now
             ent["msg_count"] = int(ent.get("msg_count", 0)) + 1
             if group_name and group_name != ent.get("group_name"):
                 ent["group_name"] = group_name
+            if platform and not ent.get("platform"):
+                ent["platform"] = platform
+
+            if ent["msg_count"] % 25 == 0 or (now - self._seen_save_ts) > 45:
+                self._seen_save_ts = now
+                self._save_seen()
+        except Exception:
+            pass
+
+    def _record_seen_private(self, event: AstrMessageEvent, platform: str) -> None:
+        """记录私聊会话（sender 昵称复用 group_name 字段展示，kind 标记区分）。"""
+        try:
+            uid = ""
+            nickname = ""
+            try:
+                msg_obj = getattr(event, "message_obj", None)
+                sender = getattr(msg_obj, "sender", None) if msg_obj is not None else None
+                if sender is not None:
+                    for a in ("user_id", "id", "qq", "uid"):
+                        uid = str(getattr(sender, a, "") or "").strip()
+                        if uid:
+                            break
+                    for a in ("nickname", "remark", "card", "name"):
+                        nickname = str(getattr(sender, a, "") or "").strip()
+                        if nickname:
+                            break
+            except Exception:
+                pass
+            if not uid:
+                ck = self._canonical_key(event)
+                if ck.startswith("private:"):
+                    uid = ck.split(":", 1)[1]
+            if not uid:
+                return
+            uid = re.sub(r"\D", "", uid) or uid
+            key = f"private:{uid}"
+
+            now = int(time.time())
+            ent = self._seen_groups.setdefault(key, {
+                "gid": uid, "group_name": nickname, "platform": platform,
+                "kind": "private",
+                "first_seen": now, "last_seen": now, "msg_count": 0,
+            })
+            ent["kind"] = "private"
+            ent["last_seen"] = now
+            ent["msg_count"] = int(ent.get("msg_count", 0)) + 1
+            if nickname and nickname != ent.get("group_name"):
+                ent["group_name"] = nickname
             if platform and not ent.get("platform"):
                 ent["platform"] = platform
 
@@ -715,3 +766,11 @@ class XbdocStoreMixin:
             return v if v > 0 else default
         except Exception:
             return default
+
+
+    def _cfg_no_limit(self, key: str) -> int:
+        """读取字符上限：<=0 表示不限制、保证完整注入（与 _cfg_int 强制正数不同）。"""
+        try:
+            return int(self._cfg(key, CONFIG_DEFAULTS.get(key, 0)))
+        except Exception:
+            return int(CONFIG_DEFAULTS.get(key, 0))

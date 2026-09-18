@@ -129,7 +129,7 @@ class XbdocPlugin(XbdocStoreMixin, XbdocCommandsMixin, XbdocWebAPIMixin, Star):
 
 
     def build_inject_text(self, query: str, doc_ids: List[str]) -> str:
-        max_chars = self._cfg_int("max_inject_chars")
+        max_chars = self._cfg_no_limit("max_inject_chars")
         hits = self.retrieve(query, doc_ids)
         if not hits:
             return ""
@@ -137,7 +137,7 @@ class XbdocPlugin(XbdocStoreMixin, XbdocCommandsMixin, XbdocWebAPIMixin, Star):
         total = 0
         for h in hits:
             seg = f"{h['filename']} (片段{h['chunk_idx']+1}):\n{h['text']}"
-            if total + len(seg) > max_chars:
+            if max_chars > 0 and total + len(seg) > max_chars:
                 remain = max_chars - total
                 if remain > 100:
                     parts.append(seg[:remain] + "\n…(截断)")
@@ -188,7 +188,7 @@ class XbdocPlugin(XbdocStoreMixin, XbdocCommandsMixin, XbdocWebAPIMixin, Star):
             # -------------------------------------------------------------
             force_sys = bool(sess.get("force_system_prompt", False))
             replace_all = bool(shield or force_sys)
-            max_chars = self._cfg_int("max_inject_chars")
+            max_chars = self._cfg_no_limit("max_inject_chars")
             if not has_bound and custom_prompt:
                 apply_system_prompt(req, custom_prompt, replace=replace_all)
                 logger.info(f"[{PLUGIN_NAME}] [专属系统词模式] 无文档，专属系统提示词独立生效 (会话: {c_key})")

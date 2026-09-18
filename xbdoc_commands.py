@@ -389,13 +389,10 @@ class XbdocCommandsMixin:
 
 
     async def doc_prompt_set(self, event: AstrMessageEvent):
-        """设置本群专属提示词 /doc prompt_set <内容>（管理员）"""
+        """设置本群专属提示词 /doc prompt_set <内容>（管理员；不设上限，保证完整注入）"""
         text = re.sub(r"^/doc\s+prompt_set\s*", "", event.message_str or "").strip()
         if len(text) < 2:
             yield event.plain_result("用法：/doc prompt_set <本群专属提示词内容>，至少2个字。")
-            return
-        if len(text) > 4000:
-            yield event.plain_result("提示词超出 4000 字上限，请精简后重试。")
             return
         key, _ = self._resolve_session(event, create=False)
         self.set_session_prompt(key, text)

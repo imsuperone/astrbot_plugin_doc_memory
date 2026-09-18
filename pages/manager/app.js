@@ -444,14 +444,15 @@
     }
 
     box.innerHTML = list.slice(0, 15).map((g) => {
-      const firstLetter = (g.group_name || g.gid || "群").charAt(0).toUpperCase();
+      const isPrivate = g.kind === "private";
+      const firstLetter = (g.group_name || g.gid || (isPrivate ? "私" : "群")).charAt(0).toUpperCase();
       return `
         <div class="suggest-card" data-key="${esc(g.session_key || ('group:' + g.gid))}">
           <div style="display:flex; align-items:center;">
             <div class="suggest-avatar">${esc(firstLetter)}</div>
             <div class="suggest-info">
-              <strong>${esc(g.group_name || ("群聊 " + g.gid))}</strong>
-              <span>${esc(g.platform ? g.platform + ' · ' : '')}群号: ${esc(g.gid)} ${g.msg_count ? ' · ' + g.msg_count + '条发言' : ''}</span>
+              <strong>${esc(g.group_name || ((isPrivate ? "私聊 " : "群聊 ") + g.gid))}</strong>
+              <span>${esc(g.platform ? g.platform + ' · ' : '')}${isPrivate ? "私聊 UID" : "群号"}: ${esc(g.gid)} ${g.msg_count ? ' · ' + g.msg_count + '条发言' : ''}</span>
             </div>
           </div>
           ${g.bound ? '<span class="badge-pill" style="background:var(--md-sys-color-primary-container); color:var(--md-sys-color-primary); font-weight:600;">已绑定</span>' : '<span class="badge-pill">选用</span>'}
@@ -524,7 +525,11 @@
       const s = (v || "").trim();
       if (!s) return "";
       if (bindingsMap[s]) return s;
-      if (/^\d{5,}$/.test(s) && bindingsMap["group:" + s]) return "group:" + s;
+      if (/^\d{5,}$/.test(s)) {
+        // 纯数字可能是群号也可能是私聊 UID：已存在的绑定优先命中，避免串台
+        if (bindingsMap["private:" + s] && !bindingsMap["group:" + s]) return "private:" + s;
+        if (bindingsMap["group:" + s]) return "group:" + s;
+      }
       return "";
     }
 
@@ -732,7 +737,12 @@
         }
 
         if (/^\d{5,}$/.test(key)) {
-          key = "group:" + key;
+          // 纯数字默认按群号；仅当该号只有私聊绑定时纠偏为私聊，避免手填 UID 存错地方
+          if (bindingsMap["private:" + key] && !bindingsMap["group:" + key]) {
+            key = "private:" + key;
+          } else {
+            key = "group:" + key;
+          }
           input.value = key;
         }
 
@@ -833,14 +843,17 @@
 
       const curMode = raw.mode === "system" ? "system" : (raw.mode === "workspace" ? "workspace" : "reference");
 
-      // Group Name display
-      const groupDisplayName = raw.group_name ? raw.group_name : (raw.gid ? `群聊 ${raw.gid}` : k);
+      // Session Name display（私聊显示昵称/私聊 UID，不与群混淆）
+      const isPrivateSession = raw.kind === "private" || k.startsWith("private:");
+      const groupDisplayName = raw.group_name
+        ? raw.group_name
+        : (raw.gid ? `${isPrivateSession ? "私聊" : "群聊"} ${raw.gid}` : k);
 
       return `
         <div class="binding-card" data-key="${esc(k)}">
           <div class="binding-card-meta">
             <div class="binding-card-key">
-              <span class="binding-group-name">👥 ${esc(groupDisplayName)}</span>
+              <span class="binding-group-name">${isPrivateSession ? "💬" : "👥"} ${esc(groupDisplayName)}</span>
               <span class="badge-pill id-badge">${esc(k)}</span>
             </div>
             <div class="binding-card-docs">

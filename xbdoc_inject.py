@@ -46,8 +46,10 @@ def apply_system_prompt(req, text: str, replace: bool) -> None:
 
 
 def truncate_text(body: str, max_chars: int, min_remain: int = 200) -> str:
-    """截断公共逻辑：够长才截并打标记，否则原样返回（专属提示词永不经此截断）。"""
+    """截断公共逻辑：max_chars <= 0 表示不限制、完整注入；够长才截并打标记；专属提示词永不经此截断。"""
     body = body or ""
+    if max_chars <= 0:
+        return body
     if len(body) <= max_chars:
         return body
     if max_chars <= min_remain:
@@ -65,12 +67,12 @@ def build_system_text(doc_texts: List[str], custom_prompt: str, max_chars: int) 
 def build_workspace_text(
     files: List[Tuple[str, str]], custom_prompt: str, max_chars: int
 ) -> str:
-    """工作区模式：/workspace/<文件名> 挂载节 + 专属提示词（永不截断）。"""
+    """工作区模式：/workspace/<文件名> 挂载节 + 专属提示词（永不截断）。max_chars <= 0 时全量挂载。"""
     sections: List[str] = []
     total = 0
     for fname, body in files:
         body = body or ""
-        if total + len(body) <= max_chars:
+        if max_chars <= 0 or total + len(body) <= max_chars:
             sections.append(f"/workspace/{fname}:\n{body}")
             total += len(body)
         else:

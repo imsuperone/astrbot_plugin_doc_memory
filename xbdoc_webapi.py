@@ -163,12 +163,16 @@ class XbdocWebAPIMixin:
             else:
                 gid = ks if ks.isdigit() else ks.split(":")[-1]
             gname = ""
-            if gid and gid in self._seen_groups:
-                gname = str(self._seen_groups[gid].get("group_name") or "").strip()
+            # 私聊条目 seen 键为完整 private:uid，优先完整键，回落裸 id（群）
+            _seen = self._seen_groups.get(ks) or {}
+            if not _seen and gid and gid in self._seen_groups:
+                _seen = self._seen_groups[gid]
+            gname = str(_seen.get("group_name") or "").strip()
 
             enriched[k] = {
                 "gid": gid,
                 "group_name": gname,
+                "kind": "private" if ks.startswith("private:") else "group",
                 "docs": [{"doc_id": d, "filename": self._index.get(d, {}).get("filename", d)} for d in ids],
                 "prompt": ent.get("prompt", ""),
                 "shield": bool(ent.get("shield", False)),
@@ -192,8 +196,6 @@ class XbdocWebAPIMixin:
         bad = [i for i in ids if i not in self._index]
         if bad:
             return error_response(f"文档不存在: {', '.join(bad)}", status_code=400)
-        if "prompt" in payload and len(str(payload.get("prompt") or "")) > 4000:
-            return error_response("提示词超出 4000 字上限，请精简后重试", status_code=400)
 
         valid = self.bind_docs(key, ids)
         ent = self._get_entry(key)
@@ -389,44 +391,81 @@ class XbdocWebAPIMixin:
     def _get_all_merged_groups(self, q: str = "", limit: int = 60) -> List[Dict[str, Any]]:
         merged: Dict[str, Dict[str, Any]] = {}
 
-        for gid, meta in (self._seen_groups or {}).items():
-            gid = str(gid).strip()
-            if gid:
-                merged[gid] = {
-                    "gid": gid, "group_name": str(meta.get("group_name") or ""),
+        for raw_key, meta in (self._seen_groups or {}).items():
+            raw_key = str(raw_key).strip()
+            if not raw_key:
+                continue
+            kind = str(meta.get("kind") or "").strip()
+            if raw_key.startswith("private:") or kind == "private":
+                uid = raw_key.split(":", 1)[1] if ":" in raw_key else raw_key
+                name = str(meta.get("group_name") or "").strip()
+                merged[raw_key] = {
+                    "gid": uid, "group_name": name,
                     "platform": str(meta.get("platform") or ""),
                     "msg_count": int(meta.get("msg_count") or 0),
                     "last_seen": int(meta.get("last_seen") or 0),
-                    "bound": False,
+                    "bound": False, "kind": "private",
+                    "session_key": raw_key,
+                    "display": name or f"私聊 {uid}",
                 }
+                continue
+            gid = raw_key
+            merged[gid] = {
+                "gid": gid, "group_name": str(meta.get("group_name") or ""),
+                "platform": str(meta.get("platform") or ""),
+                "msg_count": int(meta.get("msg_count") or 0),
+                "last_seen": int(meta.get("last_seen") or 0),
+                "bound": False, "kind": "group",
+                "session_key": f"group:{gid}",
+                "display": str(meta.get("group_name") or "").strip(),
+            }
 
         for k in (self._bindings or {}).keys():
             ks = str(k).strip()
-            if ks.startswith("private:"):
-                continue  # 私聊绑定不在群列表展示，避免与群号碰撞
-            gid = ks.split(":", 1)[1] if ks.startswith("group:") else (ks if ks.isdigit() else ks.split(":")[-1])
+            cks = self._canonical_key_str(ks)
+            if cks.startswith("private:"):
+                # 私聊绑定同样列出（字典键用完整 key，避免与群号碰撞）
+                if cks not in merged:
+                    uid = cks.split(":", 1)[1]
+                    merged[cks] = {
+                        "gid": uid, "group_name": "", "platform": "",
+                        "msg_count": 0, "last_seen": 0, "bound": True,
+                        "kind": "private", "session_key": cks,
+                        "display": f"私聊 {uid}",
+                    }
+                else:
+                    merged[cks]["bound"] = True
+                continue
+            gid = cks.split(":", 1)[1] if cks.startswith("group:") else (cks if cks.isdigit() else cks.split(":")[-1])
             if gid.isdigit() and gid not in merged:
                 merged[gid] = {
                     "gid": gid, "group_name": "", "platform": "",
                     "msg_count": 0, "last_seen": 0, "bound": True,
+                    "kind": "group", "session_key": f"group:{gid}",
+                    "display": "",
                 }
 
         bound_gids = set()
         for k in self._bindings.keys():
-            ks = str(k)
-            if ks.startswith("group:"):
-                bound_gids.add(ks.split(":", 1)[1])
-            elif ks.isdigit():
-                bound_gids.add(ks)
-        for g in merged.values():
-            if g["gid"] in bound_gids:
+            cks = self._canonical_key_str(str(k))
+            if cks.startswith("group:"):
+                bound_gids.add(cks.split(":", 1)[1])
+            elif cks.isdigit():
+                bound_gids.add(cks)
+        for key, g in merged.items():
+            if g.get("kind") == "private":
+                g["bound"] = bool(key in self._bindings)
+            elif g["gid"] in bound_gids:
                 g["bound"] = True
-            g["session_key"] = f"group:{g['gid']}"
-            g["display"] = (g["group_name"] or "").strip()
+            if not g.get("session_key"):
+                g["session_key"] = f"group:{g['gid']}"
+            if not g.get("display"):
+                g["display"] = (g["group_name"] or "").strip()
 
         items = list(merged.values())
         if q:
-            items = [g for g in items if q in g["gid"].lower() or q in g["group_name"].lower() or q in g["platform"].lower()]
+            items = [g for g in items if q in g["gid"].lower() or q in g["group_name"].lower()
+                     or q in g["platform"].lower() or q in str(g.get("display") or "").lower()]
         items.sort(key=lambda g: (not g["bound"], -g["last_seen"], -g["msg_count"], g["gid"]))
         return items[:limit]
 
