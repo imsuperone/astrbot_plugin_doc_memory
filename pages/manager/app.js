@@ -284,21 +284,25 @@
     });
   }
 
-  // ---- Document Search Filter ----
+  // ---- Document Search Filter (150ms 防抖：输入过程中不反复全量重排) ----
   function initDocSearch() {
     const input = $("docSearchInput");
     if (!input) return;
 
+    let timer = null;
     input.addEventListener("input", (e) => {
-      const q = e.target.value.trim().toLowerCase();
-      if (!q) {
-        renderDocs(docsList);
-        return;
-      }
-      const filtered = docsList.filter((d) =>
-        (d.filename || "").toLowerCase().includes(q) || (d.doc_id || "").toLowerCase().includes(q)
-      );
-      renderDocs(filtered);
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        const q = e.target.value.trim().toLowerCase();
+        if (!q) {
+          renderDocs(docsList);
+          return;
+        }
+        const filtered = docsList.filter((d) =>
+          (d.filename || "").toLowerCase().includes(q) || (d.doc_id || "").toLowerCase().includes(q)
+        );
+        renderDocs(filtered);
+      }, 150);
     });
   }
 
@@ -516,16 +520,20 @@
     });
 
     // 手填 Key 切走时：命中已知会话则载入，否则重置提示词/开关为默认，避免把上个群的配置存到新群
+    // 后缀精确匹配：限定 key（group:plat:123）同样能被纯数字/老格式命中
     function findBindingKey(v) {
       const s = (v || "").trim();
       if (!s) return "";
       if (bindingsMap[s]) return s;
+      const tailEq = (k) => String(k || "").split(":").pop() === s;
       if (/^\d{5,}$/.test(s)) {
         // 纯数字可能是群号也可能是私聊 UID：已存在的绑定优先命中，避免串台
-        if (bindingsMap["private:" + s] && !bindingsMap["group:" + s]) return "private:" + s;
-        if (bindingsMap["group:" + s]) return "group:" + s;
+        const priv = Object.keys(bindingsMap).find((k) => k.startsWith("private:") && tailEq(k));
+        const grp = Object.keys(bindingsMap).find((k) => k.startsWith("group:") && tailEq(k));
+        if (priv && !grp) return priv;
+        if (grp) return grp;
       }
-      return "";
+      return Object.keys(bindingsMap).find(tailEq) || "";
     }
 
     function resetSessionControls() {
@@ -743,9 +751,12 @@
         }
 
         if (/^\d{5,}$/.test(key)) {
-          // 纯数字默认按群号；仅当该号只有私聊绑定时纠偏为私聊，避免手填 UID 存错地方
-          if (bindingsMap["private:" + key] && !bindingsMap["group:" + key]) {
-            key = "private:" + key;
+          // 纯数字：已有绑定按后缀精确认领（含限定 key），都没有默认按群号；后端还会按 seen 再补限定
+          const tailEq = (k) => String(k || "").split(":").pop() === key;
+          const hit = Object.keys(bindingsMap).find((k) =>
+            (k.startsWith("private:") || k.startsWith("group:")) && tailEq(k));
+          if (hit) {
+            key = hit;
           } else {
             key = "group:" + key;
           }
@@ -991,7 +1002,15 @@
     });
   }
 
-  // ---- Bottom Sheet Document Reader ----
+  // ---- Bottom Sheet Document Reader (带切片缓存 + 下一片预取，翻页不再每次等网络) ----
+  const readerCache = new Map(); // key: `${docId}:${chunk}` -> res，简单有界（最多 60 片）
+  function readerCacheSet(k, v) {
+    if (readerCache.size >= 60) {
+      const oldest = readerCache.keys().next().value;
+      readerCache.delete(oldest);
+    }
+    readerCache.set(k, v);
+  }
   async function openReader(docId, chunk = 1) {
     currentReaderDoc = docId;
     currentReaderChunk = chunk;
@@ -1010,15 +1029,37 @@
     if (subEl) subEl.textContent = `切片 ${chunk}`;
     if (textEl) textEl.textContent = "正在向服务器请求文档片段…";
 
-    try {
-      const res = await api.get("docs/content", { doc_id: docId, chunk });
+    const cacheKey = `${docId}:${chunk}`;
+    const applyRes = (res) => {
       currentReaderTotal = res.total || 1;
+      currentReaderChunk = res.chunk || chunk;
       if (titleEl) titleEl.textContent = res.meta?.filename || res.filename || docId;
       if (subEl) subEl.textContent = `切片 ${res.chunk} / ${res.total} (共 ${res.meta?.text_len || 0} 字)`;
       if (textEl) textEl.textContent = res.preview || "（该切片暂无文本内容）";
 
       if (prevBtn) prevBtn.disabled = currentReaderChunk <= 1;
       if (nextBtn) nextBtn.disabled = currentReaderChunk >= currentReaderTotal;
+      // 预取下一片：翻页更快，失败静默
+      const next = currentReaderChunk + 1;
+      if (next <= currentReaderTotal && !readerCache.has(`${docId}:${next}`)) {
+        api.get("docs/content", { doc_id: docId, chunk: next }).then(
+          (r) => readerCacheSet(`${docId}:${next}`, r),
+          () => {}
+        );
+      }
+    };
+
+    const cached = readerCache.get(cacheKey);
+    if (cached) {
+      applyRes(cached);
+      return;
+    }
+    try {
+      const res = await api.get("docs/content", { doc_id: docId, chunk });
+      readerCacheSet(cacheKey, res);
+      // 用户已翻到别处则丢弃本次结果，避免乱序覆盖
+      if (currentReaderDoc !== docId || currentReaderChunk !== chunk) return;
+      applyRes(res);
     } catch (err) {
       if (textEl) textEl.textContent = "读取切片失败: " + err.message;
     }

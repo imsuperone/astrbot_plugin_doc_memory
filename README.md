@@ -4,7 +4,7 @@
 
 -   📦 项目主页：[https://github.com/imsuperone/xbdoc](https://github.com/imsuperone/xbdoc)
 -   🔌 插件 ID：`astrbot_plugin_xbdoc`
--   📌 版本：`v1.0.15`，要求 AstrBot `>=4.16`
+-   📌 版本：`v1.1.1`，要求 AstrBot `>=4.16`
 
 ---
 
@@ -97,6 +97,10 @@
 ## 🧾 备注
 
 -   私聊独立绑定受 `allow_private_bind` 控制（默认开启），和机器人私聊一句后即可在 WebUI 搜到并绑定。
+-   会话命名空间按 `group:平台:群号` / `private:平台:UID` 划分，跨平台同号群彻底隔离；老格式 `group:群号` 启动自动迁移（seen 单一认领才转）、运行时读取回落不断连、写入自动接管合并，多认领冲突会打日志提醒手动确认。
+-   `/doc mode` 支持 `s / w / r` 快捷（system / workspace / reference），未知模式会明确报错，不再静默回落。
+-   `force` 开启但专属提示词为空时不再清空原人格；`shield` 开启仍会清空（符合其语义）。
+-   `/doc forget` 等同于 `/doc no`，同样仅管理员可用。
 -   关闭 `auto_inject` 后不再自动检索文档，但专属提示词与屏蔽依然生效。
 -   数据持久化在 `data/plugin_data/astrbot_plugin_xbdoc`（`index.json` / `bindings.json` / `seen_groups.json` / `docs/`）。
 -   卸载重装不会丢数据；要彻底清零请先停服再删除上述数据目录。

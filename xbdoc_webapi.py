@@ -110,7 +110,10 @@ class XbdocWebAPIMixin:
             return error_response("未读取到上传文件内容，请重试", status_code=400)
 
         try:
-            meta = self.add_document(filename, data)
+            # 入库含解码/切片等 CPU 与磁盘 IO，扔到线程池避免阻塞事件循环
+            meta = await asyncio.get_running_loop().run_in_executor(
+                None, self.add_document, filename, data
+            )
             return json_response({"ok": True, "doc": meta})
         except RuntimeError as e:
             return error_response(str(e), status_code=400)
@@ -156,32 +159,28 @@ class XbdocWebAPIMixin:
 
 
     async def _api_list_bindings(self):
-        # 自动执行规范化去重合并；内容有变才回写，避免内存与文件长期分叉
-        _normalized = self._normalize_bindings(self._bindings)
-        if _normalized != self._bindings:
-            self._bindings = _normalized
-            self._save_json(self.bindings_path, self._bindings)
+        # 只读接口：用规范化副本展示，不回写（回写只发生在启动加载与保存入口，避免 GET/POST 竞态）
+        _view = self._normalize_bindings(self._bindings)
         enriched = {}
-        for k, ent in self._bindings.items():
+        for k, ent in _view.items():
             ids = ent.get("doc_ids", [])
-            ks = str(k).strip()
-            if ks.startswith("private:"):
-                gid = ks.split(":", 1)[1]
-            elif ks.startswith("group:"):
-                gid = ks.split(":", 1)[1]
-            else:
-                gid = ks if ks.isdigit() else ks.split(":")[-1]
-            gname = ""
-            # 私聊条目 seen 键为完整 private:uid，优先完整键，回落裸 id（群）
-            _seen = self._seen_groups.get(ks) or {}
-            if not _seen and gid and gid in self._seen_groups:
-                _seen = self._seen_groups[gid]
+            kind, plat, ident = self._split_session_key(str(k))
+            if not kind:
+                kind, plat, ident = "group", None, str(k).strip().split(":")[-1]
+            gid = ident
+            # seen 查找：完整键 -> 老格式键 -> 群裸 gid 键，逐级回落
+            _seen = self._seen_groups.get(str(k)) or {}
+            if not _seen:
+                _seen = self._seen_groups.get(f"{kind}:{gid}") or {}
+            if not _seen and kind == "group":
+                _seen = self._seen_groups.get(gid) or {}
             gname = str(_seen.get("group_name") or "").strip()
 
             enriched[k] = {
                 "gid": gid,
                 "group_name": gname,
-                "kind": "private" if ks.startswith("private:") else "group",
+                "platform": plat or str(ent.get("platform") or _seen.get("platform") or ""),
+                "kind": kind,
                 "docs": [{"doc_id": d, "filename": self._index.get(d, {}).get("filename", d)} for d in ids],
                 "prompt": ent.get("prompt", ""),
                 "shield": bool(ent.get("shield", False)),
@@ -206,34 +205,39 @@ class XbdocWebAPIMixin:
         if bad:
             return error_response(f"文档不存在: {', '.join(bad)}", status_code=400)
 
-        valid = self.bind_docs(key, ids)
-        ent = self._get_entry(key)
-        if "prompt" in payload:
-            ent["prompt"] = str(payload.get("prompt") or "").strip()
-        if "shield" in payload:
-            sh = payload.get("shield")
-            ent["shield"] = bool(sh) if sh is not None else False
-        if "force_system_prompt" in payload:
-            ent["force_system_prompt"] = bool(payload.get("force_system_prompt"))
-        if "mode" in payload:
-            ent["mode"] = self._normalize_mode(payload.get("mode"))
-        if not valid:
-            # 未绑定任何文档时模式强制回落，与聊天指令保持一致
-            ent["mode"] = "reference"
+        # 读改写加锁：WebUI 保存与聊天指令并发时不互相覆盖
+        with self._save_lock:
+            # 手填老格式按 seen 补平台限定；限定 key 接管同 id 老条目（自愈，不分裂）
+            key = self._adopt_legacy(self._qualify_session_key(key))
+            valid = self.bind_docs(key, ids)
+            ent = self._get_entry(key)
+            if "prompt" in payload:
+                ent["prompt"] = str(payload.get("prompt") or "").strip()
+            if "shield" in payload:
+                sh = payload.get("shield")
+                ent["shield"] = bool(sh) if sh is not None else False
+            if "force_system_prompt" in payload:
+                ent["force_system_prompt"] = bool(payload.get("force_system_prompt"))
+            if "mode" in payload:
+                ent["mode"] = self._normalize_mode(payload.get("mode")) or "reference"
+            if not valid:
+                # 未绑定任何文档时模式强制回落，与聊天指令保持一致
+                ent["mode"] = "reference"
 
-        self._prune_empty_entry(key)
-        self._save_json(self.bindings_path, self._bindings)
-        # prune 可能已删除空条目，此时用孤儿 ent 回包会与实际落盘不一致，需重取
-        ent = self._bindings.get(key) or {
-            "prompt": "", "shield": False, "force_system_prompt": False, "mode": "reference",
-        }
-        return json_response({
-            "ok": True, "session_key": key, "doc_ids": valid,
-            "prompt": ent.get("prompt", ""),
-            "shield": ent.get("shield", False),
-            "force_system_prompt": ent.get("force_system_prompt", False),
-            "mode": ent.get("mode", "reference"),
-        })
+            self._prune_empty_entry(key)
+            self._save_json(self.bindings_path, self._bindings)
+            # prune 可能已删除空条目，此时用孤儿 ent 回包会与实际落盘不一致，需重取
+            ent = self._bindings.get(key) or {
+                "prompt": "", "shield": False, "force_system_prompt": False, "mode": "reference",
+            }
+            resp = {
+                "ok": True, "session_key": key, "doc_ids": valid,
+                "prompt": ent.get("prompt", ""),
+                "shield": ent.get("shield", False),
+                "force_system_prompt": ent.get("force_system_prompt", False),
+                "mode": ent.get("mode", "reference"),
+            }
+        return json_response(resp)
 
 
     def _find_all_bots(self) -> List[Any]:
@@ -284,13 +288,13 @@ class XbdocWebAPIMixin:
             self._bots_cache = {"targets": list(targets), "ts": time.time()}
             return targets
 
-        # 3. 兜底：有界泛遍历（保留 *manager 等关键字，并设访问上限防卡顿）
+        # 3. 兜底：有界泛遍历（官方通道与事件缓存都 miss 才走；预算从严，防卡顿）
         import inspect
         visited: set = set()
-        budget = [800]
+        budget = [200]
 
         def _traverse(obj, depth=0):
-            if depth > 4 or obj is None or budget[0] <= 0:
+            if depth > 3 or obj is None or budget[0] <= 0:
                 return
             oid = id(obj)
             if oid in visited:
@@ -342,12 +346,12 @@ class XbdocWebAPIMixin:
         async def _call(cand, act):
             try:
                 if callable(getattr(cand, "call_action", None)):
-                    return await asyncio.wait_for(cand.call_action(act), timeout=5)
+                    return await asyncio.wait_for(cand.call_action(act), timeout=4)
                 if callable(getattr(cand, "call_api", None)):
-                    return await asyncio.wait_for(cand.call_api(act), timeout=5)
+                    return await asyncio.wait_for(cand.call_api(act), timeout=4)
                 fn = getattr(cand, act, None)
                 if callable(fn):
-                    return await asyncio.wait_for(fn(), timeout=5)
+                    return await asyncio.wait_for(fn(), timeout=4)
             except Exception:
                 pass
             return None
@@ -359,12 +363,12 @@ class XbdocWebAPIMixin:
                 results = []
             return (cand, results)
 
-        # 全体并发 + 整体 18 秒熔断（超时自动取消子任务）；结果按适配器顺序取首个成功的，保持原有优先级语义
+        # 全体并发 + 整体 12 秒熔断（超时自动取消子任务）；多适配器结果合并，不再首个成功即停
         per_bot: List[Any] = []
         try:
             per_bot = await asyncio.wait_for(
                 asyncio.gather(*[_try_bot(b) for b in bots[:5]], return_exceptions=True),
-                timeout=18,
+                timeout=12,
             )
         except Exception:
             per_bot = []
@@ -375,7 +379,6 @@ class XbdocWebAPIMixin:
             cand, results = item
             if not isinstance(results, list):
                 continue
-            got = False
             for info in results:
                 if not isinstance(info, (dict, list)):
                     continue
@@ -387,13 +390,19 @@ class XbdocWebAPIMixin:
                         gid = str(g.get("group_id") or g.get("gid") or g.get("id") or "").strip()
                         if not gid:
                             continue
+                        if gid in found_groups:
+                            continue  # 多适配器同号群保留首个来源，避免反复覆盖
                         gname = str(g.get("group_name") or g.get("name") or g.get("title") or "").strip()
                         try:
                             m_count = int(g.get("member_count") or g.get("members_count") or 0)
                         except Exception:
                             m_count = 0
                         p_name = str(getattr(cand, "platform_name", "") or getattr(cand, "name", "") or "onebot")
-                        found_groups[gid] = {
+                        # 平台+群号双键：跨平台同号群各自保留，不再互相覆盖
+                        fkey = f"{p_name}:{gid}"
+                        if fkey in found_groups:
+                            continue
+                        found_groups[fkey] = {
                             "gid": gid,
                             "group_name": gname,
                             "member_count": m_count,
@@ -401,13 +410,14 @@ class XbdocWebAPIMixin:
                             "last_seen": int(time.time()),
                             "msg_count": 0,
                         }
-                    got = True
-            if got:
-                break
 
         now = int(time.time())
-        for gid, item in found_groups.items():
-            ent = self._seen_groups.setdefault(gid, {
+        for _fkey, item in found_groups.items():
+            gid = str(item.get("gid") or "").strip()
+            if not gid:
+                continue
+            seen_key = f"group:{item['platform']}:{gid}" if item.get("platform") else gid
+            ent = self._seen_groups.setdefault(seen_key, {
                 "gid": gid, "group_name": item["group_name"], "platform": item["platform"],
                 "first_seen": now, "last_seen": now, "msg_count": 0,
             })
@@ -424,15 +434,17 @@ class XbdocWebAPIMixin:
 
 
     def _get_all_merged_groups(self, q: str = "", limit: int = 60) -> List[Dict[str, Any]]:
+        """seen + bindings 合并列表：字典键即 session_key（新老格式共存），bound 按完整 key 精确判定。"""
         merged: Dict[str, Dict[str, Any]] = {}
 
         for raw_key, meta in (self._seen_groups or {}).items():
             raw_key = str(raw_key).strip()
-            if not raw_key:
+            if not raw_key or not isinstance(meta, dict):
                 continue
             kind = str(meta.get("kind") or "").strip()
             if raw_key.startswith("private:") or kind == "private":
-                uid = raw_key.split(":", 1)[1] if ":" in raw_key else raw_key
+                _k, _p, uid = self._split_session_key(raw_key)
+                uid = uid or raw_key.split(":", 1)[1] if ":" in raw_key else raw_key
                 name = str(meta.get("group_name") or "").strip()
                 merged[raw_key] = {
                     "gid": uid, "group_name": name,
@@ -444,54 +456,45 @@ class XbdocWebAPIMixin:
                     "display": name or f"私聊 {uid}",
                 }
                 continue
-            gid = raw_key
-            merged[gid] = {
+            _k, _p, gid = self._split_session_key(raw_key)
+            gid = gid or raw_key  # 老裸 gid 键
+            sk = raw_key if _k == "group" else f"group:{gid}"
+            merged[sk] = {
                 "gid": gid, "group_name": str(meta.get("group_name") or ""),
                 "platform": str(meta.get("platform") or ""),
                 "msg_count": int(meta.get("msg_count") or 0),
                 "last_seen": int(meta.get("last_seen") or 0),
                 "bound": False, "kind": "group",
-                "session_key": f"group:{gid}",
+                "session_key": sk,
                 "display": str(meta.get("group_name") or "").strip(),
             }
 
-        for k in (self._bindings or {}).keys():
-            ks = str(k).strip()
-            cks = self._canonical_key_str(ks)
-            if cks.startswith("private:"):
-                # 私聊绑定同样列出（字典键用完整 key，避免与群号碰撞）
-                if cks not in merged:
-                    uid = cks.split(":", 1)[1]
-                    merged[cks] = {
-                        "gid": uid, "group_name": "", "platform": "",
-                        "msg_count": 0, "last_seen": 0, "bound": True,
-                        "kind": "private", "session_key": cks,
-                        "display": f"私聊 {uid}",
-                    }
-                else:
-                    merged[cks]["bound"] = True
+        bound_keys = {self._canonical_key_str(str(k)) for k in (self._bindings or {}).keys()}
+        for k in list(bound_keys):
+            if not k:
                 continue
-            gid = cks.split(":", 1)[1] if cks.startswith("group:") else (cks if cks.isdigit() else cks.split(":")[-1])
-            if gid.isdigit() and gid not in merged:
-                merged[gid] = {
-                    "gid": gid, "group_name": "", "platform": "",
+            if k in merged:
+                merged[k]["bound"] = True
+                continue
+            # 无 seen 记录的绑定：空壳卡片（bound=True，保证配过的一定能选到）
+            kind, _p, ident = self._split_session_key(k)
+            if kind == "private":
+                merged[k] = {
+                    "gid": ident, "group_name": "", "platform": _p or "",
                     "msg_count": 0, "last_seen": 0, "bound": True,
-                    "kind": "group", "session_key": f"group:{gid}",
+                    "kind": "private", "session_key": k,
+                    "display": f"私聊 {ident}",
+                }
+            else:
+                gid = ident.split(":")[-1] if ident else k
+                merged[k] = {
+                    "gid": gid, "group_name": "", "platform": _p or "",
+                    "msg_count": 0, "last_seen": 0, "bound": True,
+                    "kind": "group", "session_key": k,
                     "display": "",
                 }
 
-        bound_gids = set()
-        for k in self._bindings.keys():
-            cks = self._canonical_key_str(str(k))
-            if cks.startswith("group:"):
-                bound_gids.add(cks.split(":", 1)[1])
-            elif cks.isdigit():
-                bound_gids.add(cks)
-        for key, g in merged.items():
-            if g.get("kind") == "private":
-                g["bound"] = bool(key in self._bindings)
-            elif g["gid"] in bound_gids:
-                g["bound"] = True
+        for g in merged.values():
             if not g.get("session_key"):
                 g["session_key"] = f"group:{g['gid']}"
             if not g.get("display"):

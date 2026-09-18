@@ -13,7 +13,7 @@ from collections import Counter
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from xbdoc_inject import build_system_text, build_workspace_text, truncate_text
-from xbdoc_retrieval import chunk_text, score_chunk_bm25, score_chunk_tf, tokenize
+from xbdoc_retrieval import chunk_text, score_chunk_bm25, tokenize
 
 
 def _idf(counters):
@@ -63,7 +63,6 @@ def test_bm25_edges():
     assert score_chunk_bm25([], c, 1, avg, idf) == 0.0
     assert score_chunk_bm25(tokenize("apple"), Counter(), 0, 0.0, {}) == 0.0
     assert score_chunk_bm25(tokenize("zzz"), c, 1, avg, idf) == 0.0
-    assert score_chunk_tf(tokenize("apple"), c) > 0  # 旧算法保留兼容
 
 
 def test_tokenize_cjk_ext():

@@ -3,4 +3,5 @@ __pycache__/
 *.pyo
 *.zip
 *.tmp
+*.bak
 data_store/

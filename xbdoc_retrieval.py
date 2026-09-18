@@ -25,10 +25,30 @@ ALLOWED_SUFFIXES = {
     ".html", ".htm", ".pdf", ".docx",
 }
 
+# 单次提取上限：超大 PDF 全量解码会吃爆内存/切片，切片 JSON 也会失控；注入侧另有上限
+MAX_EXTRACT_CHARS = 500_000
+
+
+def _cap_extract(text: str) -> str:
+    if len(text) > MAX_EXTRACT_CHARS:
+        return text[:MAX_EXTRACT_CHARS] + "\n…(原文超长截断)"
+    return text
+
 
 def tokenize(text: str) -> List[str]:
     """多语言混合分词：英文按词，中文/假名/谚文/扩展汉字按单字，统一小写。"""
     return [t.lower() for t in _TOKEN_RE.findall(text or "")]
+
+
+def _overlap_tail(buf: str, overlap: int) -> str:
+    """取 overlap 尾巴时尽量不断开英文单词：有空格时从空格后起，无空格（纯中文）保持字符级。"""
+    tail = buf[-overlap:]
+    # 只在尾巴较大且存在较早的断点时才 snap，避免 overlap 被削到过小
+    for sep in ("\n", " ", "\t"):
+        i = tail.find(sep)
+        if 0 <= i < len(tail) - 20:
+            return tail[i + 1:]
+    return tail
 
 
 def chunk_text(text: str, chunk_size: int = 1500, overlap: int = 200) -> List[str]:
@@ -50,7 +70,7 @@ def chunk_text(text: str, chunk_size: int = 1500, overlap: int = 200) -> List[st
         else:
             if buf:
                 chunks.append(buf)
-                buf = (buf[-overlap:] + "\n" + p).strip() if overlap else p
+                buf = (_overlap_tail(buf, overlap) + "\n" + p).strip() if overlap else p
             else:
                 # buf 为空但单段已超长：不能丢弃，直接以该段为起点再硬切
                 buf = p
@@ -60,25 +80,6 @@ def chunk_text(text: str, chunk_size: int = 1500, overlap: int = 200) -> List[st
     if buf:
         chunks.append(buf)
     return [c for c in chunks if c.strip()]
-
-
-def score_chunk_tf(query_tokens: List[str], tf: Counter) -> float:
-    """基于预计算词频计分，避免每次检索重复分词（性能优化）。
-
-    历史算法保留作兼容；新检索默认走 score_chunk_bm25。
-    """
-    if not query_tokens or not tf:
-        return 0.0
-    score = 0.0
-    unique_q = set(query_tokens)
-    for t in unique_q:
-        c = tf.get(t, 0)
-        if c > 0:
-            w = 0.5 if len(t) == 1 and "一" <= t <= "鿿" else 1.0
-            score += w * (1.0 + 0.3 * (min(c, 5) - 1))
-    hits = sum(1 for t in unique_q if tf.get(t, 0) > 0)
-    score *= 1.0 + 0.2 * (hits / max(1, len(unique_q)))
-    return round(score, 4)
 
 
 def score_chunk_bm25(
@@ -115,8 +116,9 @@ def score_chunk_bm25(
 
 
 def strip_html(raw: str) -> str:
-    """移除 HTML 标签及内嵌脚本。"""
+    """移除 HTML 标签及内嵌脚本（块级标签先换行，避免正文粘连）。"""
     text = re.sub(r"<(script|style).*?</\1>", " ", raw, flags=re.S | re.I)
+    text = re.sub(r"</(p|div|br|li|tr|h[1-6]|section|article|header|footer)[^>]*>", "\n", text, flags=re.I)
     text = re.sub(r"<[^>]+>", " ", text)
     return re.sub(r"\n{3,}", "\n\n", re.sub(r"[ \t\xa0]+", " ", text)).strip()
 
@@ -130,9 +132,9 @@ def extract_text_from_bytes(suffix: str, data: bytes) -> str:
 
     if suffix in (".md", ".markdown", ".txt", ".json", ".csv", ".log",
                   ".yaml", ".yml", ".toml", ".ini", ".cfg"):
-        return data.decode("utf-8", errors="ignore")
+        return _cap_extract(data.decode("utf-8", errors="ignore"))
     if suffix in (".html", ".htm"):
-        return strip_html(data.decode("utf-8", errors="ignore"))
+        return _cap_extract(strip_html(data.decode("utf-8", errors="ignore")))
     if suffix == ".pdf":
         try:
             from pypdf import PdfReader
@@ -147,23 +149,45 @@ def extract_text_from_bytes(suffix: str, data: bytes) -> str:
                 continue
             if t and t.strip():
                 texts.append(t.strip())
-        return "\n\n".join(texts)
+        return _cap_extract("\n\n".join(texts))
     if suffix == ".docx":
         try:
             import docx
         except ImportError as e:
             raise RuntimeError("缺少 python-docx 依赖，请 pip install python-docx 后重试。") from e
         doc = docx.Document(io.BytesIO(data))
+        # 按文档块顺序交错提取（段落在表格中间时不再被搬到文末）；解析失败再回退旧逻辑
+        try:
+            from docx.oxml.table import CT_Tbl
+            from docx.oxml.text.paragraph import CT_P
+            from docx.table import Table
+            from docx.text.paragraph import Paragraph
+            parts = []
+            for child in doc.element.body.iterchildren():
+                if isinstance(child, CT_P):
+                    t = Paragraph(child, doc).text.strip()
+                    if t:
+                        parts.append(t)
+                elif isinstance(child, CT_Tbl):
+                    for row in Table(child, doc).rows:
+                        for cell in row.cells:
+                            t = (cell.text or "").strip()
+                            if t:
+                                parts.append(t)
+            if parts:
+                return _cap_extract("\n".join(parts))
+        except Exception:
+            pass
         parts = [p.text.strip() for p in doc.paragraphs if p.text and p.text.strip()]
-        for table in doc.tables:  # 表格内容同样入库，否则整表丢失
+        for table in doc.tables:  # 回退：旧逻辑（顺序丢失，仅保底）
             for row in table.rows:
                 for cell in row.cells:
                     t = (cell.text or "").strip()
                     if t:
                         parts.append(t)
-        return "\n".join(parts)
+        return _cap_extract("\n".join(parts))
     # 其他兜底当文本解码
     text = data.decode("utf-8", errors="ignore")
     if not text.strip():
         raise RuntimeError(f"不支持的文件类型 {suffix} 或内容无法解码")
-    return text
+    return _cap_extract(text)

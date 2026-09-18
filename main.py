@@ -22,7 +22,7 @@ except Exception:
 # 子模块导入：优先包内相对导入，失败时回退到文件目录直载（兼容各类加载器）
 try:
     from .xbdoc_retrieval import score_chunk_bm25, tokenize
-    from .xbdoc_inject import apply_system_prompt, build_system_text, build_workspace_text
+    from .xbdoc_inject import apply_system_prompt, build_system_text, build_workspace_text, truncate_text
     from .xbdoc_store import PLUGIN_NAME, XbdocStoreMixin
     from .xbdoc_commands import XbdocCommandsMixin
     from .xbdoc_webapi import XbdocWebAPIMixin
@@ -32,7 +32,7 @@ except ImportError:
     if _plug_dir not in _sys.path:
         _sys.path.insert(0, _plug_dir)
     from xbdoc_retrieval import score_chunk_bm25, tokenize
-    from xbdoc_inject import apply_system_prompt, build_system_text, build_workspace_text
+    from xbdoc_inject import apply_system_prompt, build_system_text, build_workspace_text, truncate_text
     from xbdoc_store import PLUGIN_NAME, XbdocStoreMixin
     from xbdoc_commands import XbdocCommandsMixin
     from xbdoc_webapi import XbdocWebAPIMixin
@@ -47,10 +47,7 @@ class XbdocPlugin(XbdocStoreMixin, XbdocCommandsMixin, XbdocWebAPIMixin, Star):
     def __init__(self, context: Context, config: Optional[Dict[str, Any]] = None):
         super().__init__(context)
         if config is not None:
-            try:
-                self.config = config
-            except Exception:
-                pass
+            self.config = config
         self._init_store()
 
         try:
@@ -76,6 +73,13 @@ class XbdocPlugin(XbdocStoreMixin, XbdocCommandsMixin, XbdocWebAPIMixin, Star):
         if not isinstance(_cache, dict):
             _cache = self._bm25_cache = {}
         _hit = _cache.get(_key)
+        if _hit is not None:
+            # LRU：命中移到队尾，热点绑定组合不被挤掉
+            try:
+                _cache[_key] = _cache.pop(_key)
+                _hit = _cache[_key]
+            except Exception:
+                pass
         if _hit is None:
             _all_counters: List[Counter] = []
             for d, _ in _key:
@@ -112,11 +116,14 @@ class XbdocPlugin(XbdocStoreMixin, XbdocCommandsMixin, XbdocWebAPIMixin, Star):
 
             chunks = self._load_chunks(did)
             counters = self._get_chunk_counters(did)
+            lengths = [sum(c.values()) for c in counters]
             for idx, ch in enumerate(chunks):
                 tf = counters[idx] if idx < len(counters) else Counter()
-                s = score_chunk_bm25(qtokens, tf, sum(tf.values()), _avg_len, _idf) if qtokens else 0.0
+                doc_len = lengths[idx] if idx < len(lengths) else 0
+                s = score_chunk_bm25(qtokens, tf, doc_len, _avg_len, _idf) if qtokens else 0.0
                 if fname_hit:
-                    s += 10.0
+                    # 文件名命中只做小幅加权（保底召回），避免淹没 BM25 相关度排序
+                    s += 3.0
                 if s > 0:
                     scored.append({
                         "doc_id": did, "filename": meta.get("filename", did),
@@ -145,18 +152,11 @@ class XbdocPlugin(XbdocStoreMixin, XbdocCommandsMixin, XbdocWebAPIMixin, Star):
         hits = self.retrieve(query, doc_ids)
         if not hits:
             return ""
-        parts = []
-        total = 0
-        for h in hits:
-            seg = f"{h['filename']} (片段{h['chunk_idx']+1}):\n{h['text']}"
-            if max_chars > 0 and total + len(seg) > max_chars:
-                remain = max_chars - total
-                if remain > 100:
-                    parts.append(seg[:remain] + "\n…(截断)")
-                break
-            parts.append(seg)
-            total += len(seg)
-        return "\n\n".join(parts)
+        # 整体拼好再统一截断（与 system/workspace 同一截断语义），预算用满、不浪费
+        body = "\n\n".join(
+            f"{h['filename']} (片段{h['chunk_idx']+1}):\n{h['text']}" for h in hits
+        )
+        return truncate_text(body, max_chars)
 
 
     # ---------- LLM 钩子 ----------
@@ -186,7 +186,8 @@ class XbdocPlugin(XbdocStoreMixin, XbdocCommandsMixin, XbdocWebAPIMixin, Star):
             try:
                 is_private = not event.get_group_id()
             except Exception:
-                is_private = False
+                # 取不到群号时按私聊处理：未知会话默认不注入文档，最安全
+                is_private = True
             if is_private and not bool(self._cfg("allow_private_bind")):
                 return
 
@@ -221,6 +222,9 @@ class XbdocPlugin(XbdocStoreMixin, XbdocCommandsMixin, XbdocWebAPIMixin, Star):
             # -------------------------------------------------------------
             force_sys = bool(sess.get("force_system_prompt", False))
             replace_all = bool(shield or force_sys)
+            # force 开但专属提示词为空时不做空替换：否则会把原人格清成空系统词
+            if replace_all and not shield and not custom_prompt:
+                replace_all = False
             max_chars = self._cfg_no_limit("max_inject_chars")
             if not has_bound and custom_prompt:
                 apply_system_prompt(req, custom_prompt, replace=replace_all)
@@ -351,82 +355,71 @@ class XbdocPlugin(XbdocStoreMixin, XbdocCommandsMixin, XbdocWebAPIMixin, Star):
     # ---------- 聊天指令 ----------
     @staticmethod
     async def _is_admin(event: AstrMessageEvent) -> bool:
-        """管理员判定：兼容同步/协程两种 is_admin 实现；异常时放行（沿用旧语义，避免误锁管理员）。"""
+        """管理员判定：兼容同步/协程两种 is_admin 实现；异常时拒绝（fail-closed，避免误放行）。"""
         try:
             r = event.is_admin()
             if asyncio.iscoroutine(r):
                 r = await r
             return bool(r)
-        except Exception:
-            return True
+        except Exception as e:
+            try:
+                logger.warning(f"[{PLUGIN_NAME}] 管理员判定异常，已按非管理员处理: {e}")
+            except Exception:
+                pass
+            return False
 
     @filter.command("doc")
     async def doc_cmd(self, event: AstrMessageEvent):
-        """文档记忆助手统一指令入口 /doc [子指令]"""
+        """文档记忆助手统一指令入口 /doc [子指令]（参数在此一次解析，handler 只收 args/tail）"""
         raw = (event.message_str or "").strip()
         tokens = [t for t in re.split(r"\s+", raw) if t]
         sub = tokens[1].lower() if len(tokens) > 1 else ""
-        sub_args = tokens[2:] if len(tokens) > 2 else []
+        tail = re.sub(r"^/\S+\s+\S+\s*", "", raw).strip() if sub else ""
+        args = [t for t in re.split(r"\s+", tail) if t]
 
         if not sub or sub in ("help", "h", "?", "帮助", "菜单"):
             async for res in self._cmd_help(event):
                 yield res
             return
 
-        # 管理员指令校验（私聊全功能放行，群聊校验管理员）
-        admin_subs = {"bind", "unbind", "mode", "shield", "force", "prompt_set", "prompt_clear", "no"}
+        # 管理员指令校验（别名同样受控，防止 /doc forget 绕过 /doc no 的权限）
+        admin_subs = {"bind", "unbind", "mode", "shield", "force", "prompt_set", "prompt_clear",
+                      "no", "forget", "clear_history", "重置记忆"}
         if sub in admin_subs:
             try:
-                if event.get_group_id() and not await self._is_admin(event):
-                    yield event.plain_result("⚠️ 权限不足：该指令在群聊中仅限群主或管理员使用。")
-                    return
+                _gid = event.get_group_id()
             except Exception:
-                pass
+                _gid = "__unknown__"
+            if _gid and not await self._is_admin(event):
+                yield event.plain_result("⚠️ 权限不足：该指令在群聊中仅限群主或管理员使用。")
+                return
 
-        if sub == "list":
-            async for res in self.doc_list(event):
-                yield res
-        elif sub == "status":
-            async for res in self.doc_status(event):
-                yield res
-        elif sub == "bind":
-            async for res in self.doc_bind(event, *sub_args):
-                yield res
-        elif sub == "unbind":
-            async for res in self.doc_unbind(event, *sub_args):
-                yield res
-        elif sub == "mode":
-            async for res in self.doc_mode(event, *sub_args):
-                yield res
-        elif sub in ("workspace", "ws", "工作区"):
-            async for res in self.doc_workspace(event):
-                yield res
-        elif sub == "shield":
-            async for res in self.doc_shield(event, *sub_args):
-                yield res
-        elif sub == "force":
-            async for res in self.doc_force(event, *sub_args):
-                yield res
-        elif sub == "search":
-            kw = " ".join(sub_args)
-            async for res in self.doc_search(event, kw):
-                yield res
-        elif sub == "read":
-            did = sub_args[0] if sub_args else ""
-            n = sub_args[1] if len(sub_args) > 1 else "1"
-            async for res in self.doc_read(event, did, n):
-                yield res
-        elif sub == "prompt":
-            async for res in self.doc_prompt(event):
+        no_args = {
+            "list": self.doc_list,
+            "status": self.doc_status,
+            "workspace": self.doc_workspace, "ws": self.doc_workspace, "工作区": self.doc_workspace,
+            "prompt": self.doc_prompt,
+            "prompt_clear": self.doc_prompt_clear,
+        }
+        with_args = {
+            "bind": self.doc_bind,
+            "unbind": self.doc_unbind,
+            "mode": self.doc_mode,
+            "shield": self.doc_shield,
+            "force": self.doc_force,
+            "search": self.doc_search,
+            "read": self.doc_read,
+            "no": self.doc_no, "forget": self.doc_no,
+            "clear_history": self.doc_no, "重置记忆": self.doc_no,
+        }
+        if sub in no_args:
+            async for res in no_args[sub](event):
                 yield res
         elif sub == "prompt_set":
-            async for res in self.doc_prompt_set(event):
+            async for res in self.doc_prompt_set(event, tail):
                 yield res
-        elif sub == "prompt_clear":
-            async for res in self.doc_prompt_clear(event):
-                yield res
-        elif sub in ("no", "forget", "clear_history", "重置记忆"):
-            async for res in self.doc_no(event, *sub_args):
+        elif sub in with_args:
+            async for res in with_args[sub](event, args):
                 yield res
         else:
             yield event.plain_result(f"❓ 未知子指令「{sub}」，发送 /doc 可查看可用指令菜单。")

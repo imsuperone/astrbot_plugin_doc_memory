@@ -27,6 +27,23 @@
   }
 
   let _detectedPrefix = null;
+  // 全局唯一的探测锁：首屏三个并发请求共享同一次探测，不再各扫 5 个前缀
+  let _detectFlight = null;
+
+  const GET_PREFIXES = [
+    `/${PLUGIN_ID}/`,
+    `/api/plugins/${PLUGIN_ID}/`,
+    `api/`,
+    `./api/`,
+    `./`,
+  ];
+  const POST_PREFIXES = [
+    `/${PLUGIN_ID}/`,
+    `/api/plugins/${PLUGIN_ID}/`,
+    `api/`,
+    `./api/`,
+    `./`,
+  ];
 
   async function tryFetchJson(url, options = {}) {
     const res = await fetch(url, options);
@@ -35,6 +52,42 @@
       throw new Error(`HTTP ${res.status}: ${errText || res.statusText}`);
     }
     return await res.json();
+  }
+
+  // 带并发合并的前缀请求：已有探测结果直连；已有扫描在飞则等它结束复用结果；
+  // 都没有才自己扫一遍。首屏三个并发请求只产生一次扫描。
+  async function _requestWithPrefixes(prefixes, urlOf, options) {
+    if (_detectedPrefix) {
+      try {
+        return await tryFetchJson(urlOf(_detectedPrefix), options);
+      } catch (e) {}
+    }
+    if (_detectFlight) {
+      try {
+        await _detectFlight;
+      } catch (e) {}
+      if (_detectedPrefix) {
+        try {
+          return await tryFetchJson(urlOf(_detectedPrefix), options);
+        } catch (e) {}
+      }
+    }
+    const flight = (async () => {
+      for (const p of prefixes) {
+        try {
+          const r = await tryFetchJson(urlOf(p), options);
+          _detectedPrefix = p;
+          return r;
+        } catch (e) {}
+      }
+      throw new Error("__no_prefix__");
+    })();
+    _detectFlight = flight;
+    try {
+      return await flight;
+    } finally {
+      if (_detectFlight === flight) _detectFlight = null;
+    }
   }
 
   function fileToBase64(file) {
@@ -71,29 +124,11 @@
       const qs = new URLSearchParams(cleanParams).toString();
       const queryStr = qs ? `?${qs}` : "";
 
-      if (_detectedPrefix) {
-        try {
-          return await tryFetchJson(`${_detectedPrefix}${endpoint}${queryStr}`);
-        } catch (e) {}
+      try {
+        return await _requestWithPrefixes(GET_PREFIXES, (p) => `${p}${endpoint}${queryStr}`, undefined);
+      } catch (e) {
+        throw new Error(`无法连接至插件后端 API (${endpoint})`);
       }
-
-      const prefixes = [
-        `/${PLUGIN_ID}/`,
-        `/api/plugins/${PLUGIN_ID}/`,
-        `api/`,
-        `./api/`,
-        `./`,
-      ];
-
-      for (const p of prefixes) {
-        try {
-          const res = await tryFetchJson(`${p}${endpoint}${queryStr}`);
-          _detectedPrefix = p;
-          return res;
-        } catch (e) {}
-      }
-
-      throw new Error(`无法连接至插件后端 API (${endpoint})`);
     },
 
     async post(endpoint, data = {}) {
@@ -108,29 +143,11 @@
         body: JSON.stringify(data),
       };
 
-      if (_detectedPrefix) {
-        try {
-          return await tryFetchJson(`${_detectedPrefix}${endpoint}`, options);
-        } catch (e) {}
+      try {
+        return await _requestWithPrefixes(POST_PREFIXES, (p) => `${p}${endpoint}`, options);
+      } catch (e) {
+        throw new Error(`请求后端失败 (${endpoint})`);
       }
-
-      const prefixes = [
-        `/${PLUGIN_ID}/`,
-        `/api/plugins/${PLUGIN_ID}/`,
-        `api/`,
-        `./api/`,
-        `./`,
-      ];
-
-      for (const p of prefixes) {
-        try {
-          const res = await tryFetchJson(`${p}${endpoint}`, options);
-          _detectedPrefix = p;
-          return res;
-        } catch (e) {}
-      }
-
-      throw new Error(`请求后端失败 (${endpoint})`);
     },
 
     async upload(endpoint, file) {
@@ -162,11 +179,10 @@
         } catch (e) {}
       }
 
-      const prefixes = [
-        _detectedPrefix || `/${PLUGIN_ID}/`,
-        `/${PLUGIN_ID}/`,
-        `/api/plugins/${PLUGIN_ID}/`,
-      ];
+      // 已探测前缀优先，其次走标准 POST 前缀表（与 post 共用，不再各写一份）
+      const prefixes = _detectedPrefix
+        ? [_detectedPrefix, ...POST_PREFIXES]
+        : POST_PREFIXES;
 
       for (const pfx of prefixes) {
         try {

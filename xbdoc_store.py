@@ -7,11 +7,13 @@ import hashlib
 import json
 import os
 import re
+import tempfile
 import threading
 import time
 from collections import Counter
+from functools import wraps
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from astrbot.api import logger
 from astrbot.api.event import AstrMessageEvent
@@ -51,6 +53,18 @@ CONFIG_DEFAULTS: Dict[str, Any] = {
     "perf_log": False,
 }
 
+# 模式强度（隔离级别）：脏 key 合并时高强度胜出，保证结果与遍历顺序无关
+_MODE_PRIORITY = {"reference": 0, "system": 1, "workspace": 2}
+
+
+def _locked(method):
+    """串行化写方法：与 _save_lock（RLock）配合，可嵌套，不死锁。"""
+    @wraps(method)
+    def wrapper(self, *args, **kwargs):
+        with self._save_lock:
+            return method(self, *args, **kwargs)
+    return wrapper
+
 
 # ======================================================================
 # 存储 Mixin
@@ -61,7 +75,8 @@ class XbdocStoreMixin:
     def _init_store(self) -> None:
         """初始化持久化存储：路径、缓存、锁、数据加载与标准化（变化才回写）。"""
         # 锁与缓存必须先就绪：后续 _save_json/_load_chunks 依赖它们
-        self._save_lock = threading.Lock()  # 落盘锁：防 WebUI 与聊天指令并发写撕裂 tmp 文件
+        # RLock：读改写关键区（bind/unbind/入库）可与内部的 _save_json 嵌套加锁，不死锁
+        self._save_lock = threading.RLock()  # 落盘+绑定锁：防 WebUI 与聊天指令并发写撕裂
         self._chunk_cache: Dict[str, List[str]] = {}  # 内存缓存：doc_id -> chunks
         self._chunk_tokens_cache: Dict[str, List[Counter]] = {}  # 性能优化：doc_id -> 每切片词频
         self._seen_save_ts = 0  # 群记录节流时间戳（仅内存，不落盘）
@@ -85,11 +100,11 @@ class XbdocStoreMixin:
         except Exception:
             pass
 
-        # 加载并自动标准化数据（标准化改了内容才回写，避免每次启动空转 I/O）
+        # 加载并自动标准化数据（seen 先行，供绑定做平台限定迁移；有变才回写）
         self._index: Dict[str, Dict[str, Any]] = self._load_json(self.index_path, {})
         self._seen_groups: Dict[str, Dict[str, Any]] = self._load_json(self.seen_path, {})
         _raw_bindings = self._load_json(self.bindings_path, {})
-        self._bindings: Dict[str, Dict[str, Any]] = self._normalize_bindings(_raw_bindings)
+        self._bindings: Dict[str, Dict[str, Any]] = self._normalize_bindings(_raw_bindings, self._seen_groups)
         if self._bindings != _raw_bindings and self.bindings_path.exists():
             self._save_json(self.bindings_path, self._bindings)
 
@@ -139,17 +154,24 @@ class XbdocStoreMixin:
                 return new_p
             except Exception:
                 pass
+        _plug_root = Path(__file__).resolve().parent
         for cand in [
-            Path(__file__).resolve().parent / ".." / ".." / ".." / "data" / "plugin_data" / PLUGIN_NAME,
+            _plug_root.parent.parent.parent / "data" / "plugin_data" / PLUGIN_NAME,
             Path.cwd() / "data" / "plugin_data" / PLUGIN_NAME,
-            Path(__file__).resolve().parent / "data_store",
+            _plug_root / "data_store",
         ]:
             try:
                 cand.mkdir(parents=True, exist_ok=True)
                 return cand.resolve()
             except Exception:
                 continue
-        return Path.cwd()
+        # 终极兜底：系统临时目录（可写、独立、不污染工程；重启不丢由 AstrBot 数据目录保证）
+        fallback = Path(tempfile.gettempdir()) / PLUGIN_NAME
+        try:
+            fallback.mkdir(parents=True, exist_ok=True)
+            return fallback.resolve()
+        except Exception:
+            return fallback
 
 
     @staticmethod
@@ -200,13 +222,22 @@ class XbdocStoreMixin:
         self._save_json(self.seen_path, self._seen_groups)
 
 
-    def _record_seen_group(self, event: AstrMessageEvent) -> None:
-        """记录会话基础信息，供 WebUI 模糊搜索/绑定选用（群聊与私聊通用）。"""
+    @staticmethod
+    def _platform_of(event: Any) -> str:
+        """提取事件所属平台（onebot/telegram/...），取不到返回空串，不抛异常。"""
         try:
             platform = str(getattr(event, "platform_id", "") or getattr(event, "platform", "") or "")
             if not platform:
                 umo = getattr(event, "unified_msg_origin", "") or ""
                 platform = umo.split(":", 1)[0] if ":" in umo else ""
+            return platform.strip()
+        except Exception:
+            return ""
+
+    def _record_seen_group(self, event: AstrMessageEvent) -> None:
+        """记录会话基础信息，供 WebUI 模糊搜索/绑定选用（群聊与私聊通用）。"""
+        try:
+            platform = self._platform_of(event)
 
             gid = str(event.get_group_id() or "").strip()
             if not gid:
@@ -219,7 +250,9 @@ class XbdocStoreMixin:
                 group_name = str(getattr(grp, "group_name", "") or "").strip()
 
             now = int(time.time())
-            ent = self._seen_groups.setdefault(gid, {
+            # seen 键同样平台限定（group:plat:gid），跨平台同号不再互相覆盖
+            seen_key = f"group:{platform}:{gid}" if platform else gid
+            ent = self._seen_groups.setdefault(seen_key, {
                 "gid": gid, "group_name": group_name, "platform": platform,
                 "kind": "group",
                 "first_seen": now, "last_seen": now, "msg_count": 0,
@@ -263,7 +296,7 @@ class XbdocStoreMixin:
             if not uid:
                 return
             uid = re.sub(r"\D", "", uid) or uid
-            key = f"private:{uid}"
+            key = f"private:{platform}:{uid}" if platform else f"private:{uid}"
 
             now = int(time.time())
             ent = self._seen_groups.setdefault(key, {
@@ -295,6 +328,7 @@ class XbdocStoreMixin:
         return name.encode("utf-8")[:200].decode("utf-8", errors="ignore") or "unnamed"
 
 
+    @_locked
     def add_document(self, filename: str, data: bytes) -> Dict[str, Any]:
         filename = self._safe_filename(filename)
         suffix = Path(filename).suffix.lower()
@@ -345,11 +379,19 @@ class XbdocStoreMixin:
         self._chunk_cache[doc_id] = chunks  # 更新内存缓存
         self._chunk_tokens_cache.pop(doc_id, None)  # 词频缓存失效，下次检索重建
         self._fulltext_cache.pop(doc_id, None)  # 全文缓存失效
+        # BM25 全局量与绑定集合相关：任何文档变更都可能改变 idf，直接整桶清空最稳
+        try:
+            _bm25 = getattr(self, "_bm25_cache", None)
+            if isinstance(_bm25, dict):
+                _bm25.clear()
+        except Exception:
+            pass
         self._save_json(self.index_path, self._index)
         logger.info(f"[{PLUGIN_NAME}] 入库文档 {filename} id={doc_id} chunks={len(chunks)}")
         return meta
 
 
+    @_locked
     def delete_document(self, doc_id: str) -> bool:
         meta = self._index.pop(doc_id, None)
         if not meta:
@@ -367,6 +409,12 @@ class XbdocStoreMixin:
         self._chunk_cache.pop(doc_id, None)  # 清除内存缓存
         self._chunk_tokens_cache.pop(doc_id, None)
         self._fulltext_cache.pop(doc_id, None)
+        try:
+            _bm25 = getattr(self, "_bm25_cache", None)
+            if isinstance(_bm25, dict):
+                _bm25.clear()
+        except Exception:
+            pass
 
         # 同步清理所有绑定引用；被清空的会话回落模式并尝试删除空条目
         changed = False
@@ -388,8 +436,12 @@ class XbdocStoreMixin:
 
 
     def _load_chunks(self, doc_id: str) -> List[str]:
-        # 内存缓存命中
+        # 内存缓存命中（命中即移到队尾，变 FIFO 为 LRU，热点文档不被挤掉）
         if doc_id in self._chunk_cache:
+            try:
+                self._chunk_cache[doc_id] = self._chunk_cache.pop(doc_id)
+            except Exception:
+                pass
             return self._chunk_cache[doc_id]
 
         cache = self.data_dir / f"chunks_{doc_id}.json"
@@ -408,9 +460,6 @@ class XbdocStoreMixin:
             return []
         try:
             raw = (self.docs_dir / str(meta["stored_name"])).read_bytes()
-            if meta.get("is_tavern") and raw.startswith(b"\x89PNG"):
-                # 旧酒馆 PNG 文档：解析器已移除，不再从原文件重建（已缓存切片不受影响）
-                return []
             text = extract_text_from_bytes(str(meta.get("suffix", "")), raw)
             chunks = chunk_text(text, self._cfg_int("chunk_size"), self._cfg_int("chunk_overlap"))
             self._save_bytes_atomic(cache, json.dumps(chunks, ensure_ascii=False).encode("utf-8"))
@@ -437,7 +486,11 @@ class XbdocStoreMixin:
         """获取每切片词频（缓存），避免每次提问重复分词全量切片。"""
         cached = self._chunk_tokens_cache.get(doc_id)
         if cached is not None:
-            return cached
+            try:
+                self._chunk_tokens_cache[doc_id] = self._chunk_tokens_cache.pop(doc_id)
+            except Exception:
+                pass
+            return self._chunk_tokens_cache[doc_id]
         chunks = self._load_chunks(doc_id)
         counters = [Counter(tokenize(ch)) for ch in chunks]
         self._chunk_tokens_cache[doc_id] = counters
@@ -448,7 +501,11 @@ class XbdocStoreMixin:
         """获取文档全文（缓存）：system/workspace 模式每消息复用，入库/删除时失效。"""
         cached = self._fulltext_cache.get(doc_id)
         if cached is not None:
-            return cached
+            try:
+                self._fulltext_cache[doc_id] = self._fulltext_cache.pop(doc_id)
+            except Exception:
+                pass
+            return self._fulltext_cache[doc_id]
         text = "\n".join(self._load_chunks(doc_id))
         if len(self._fulltext_cache) > 50:
             try:
@@ -461,10 +518,28 @@ class XbdocStoreMixin:
 
     # ---------- 会话与绑定管理 ----------
     @staticmethod
+    def _split_session_key(cks: str):
+        """拆会话 key -> (kind, platform|None, ident)。
+
+        新格式 kind:platform:ident 原样拆；老格式 kind:ident 平台为 None；脏串 kind 为空。
+        """
+        parts = str(cks or "").strip().split(":")
+        if len(parts) >= 3 and parts[0].lower() in ("group", "private"):
+            return parts[0].lower(), parts[1].strip() or None, ":".join(parts[2:]).strip()
+        if len(parts) == 2 and parts[0].lower() in ("group", "private"):
+            return parts[0].lower(), None, parts[1].strip()
+        return "", None, str(cks or "").strip()
+
+    @staticmethod
     def _canonical_key_str(k: str) -> str:
         s = str(k or "").strip()
         if not s:
             return ""
+        # 新规范 kind:platform:ident 直接透传（platform 段不改写，只 strip；
+        # 排除 group:group:x / private:private:x 这类双重前缀脏数据，继续走下方清洗）
+        kind, plat, ident = XbdocStoreMixin._split_session_key(s)
+        if kind and plat and ident and plat.lower() != kind:
+            return f"{kind}:{plat}:{ident}"
         # 兼容 group:group:123 这类双重前缀脏数据
         while s.lower().startswith("group:group:"):
             s = s[6:]
@@ -489,41 +564,52 @@ class XbdocStoreMixin:
 
 
     def _canonical_key(self, event_or_str: Any) -> str:
+        """事件 -> 规范会话 key。新格式 kind:platform:ident（平台隔离，防跨平台同号串台）。
+
+        gid/sender 属权威 id，有平台就限定；umo 纯启发式，原样归一不二次限定；
+        平台取不到时回落老格式，保证不断连。
+        """
         if isinstance(event_or_str, str):
             return self._canonical_key_str(event_or_str)
+        plat = self._platform_of(event_or_str)
         try:
             gid = str(event_or_str.get_group_id() or "").strip()
             if gid:
-                # 防止适配器已返回 group:123 形成双重前缀
-                if gid.lower().startswith("group:"):
-                    gid = gid.split(":", 1)[1].strip()
-                if gid:
-                    return f"group:{gid}"
+                # 适配器已返回限定/复合格式（如 group:xxx / group:plat:gid）时直接规范化
+                if ":" in gid:
+                    return self._canonical_key_str(gid)
+                return f"group:{plat}:{gid}" if plat else f"group:{gid}"
         except Exception:
             pass
         umo = str(getattr(event_or_str, "unified_msg_origin", "") or "").strip()
         ck = self._canonical_key_str(umo)
         if ck.startswith("private:") or ck.startswith("group:"):
             return ck
-        # 私聊兜底：尝试取 sender id
+        # 私聊兜底：尝试取 sender id（权威 id，有平台就限定）
         try:
             for attr in ("sender_id", "user_id", "qq", "uid"):
                 uid = str(getattr(event_or_str, attr, "") or "").strip()
                 if uid:
-                    return f"private:{re.sub(r'\\D', '', uid) or uid}"
+                    uid = re.sub(r"\D", "", uid) or uid
+                    return f"private:{plat}:{uid}" if plat else f"private:{uid}"
             msg_obj = getattr(event_or_str, "message_obj", None)
             sender = getattr(msg_obj, "sender", None) if msg_obj is not None else None
             if sender is not None:
                 uid = str(getattr(sender, "user_id", "") or getattr(sender, "id", "") or "").strip()
                 if uid:
-                    return f"private:{re.sub(r'\\D', '', uid) or uid}"
+                    uid = re.sub(r"\D", "", uid) or uid
+                    return f"private:{plat}:{uid}" if plat else f"private:{uid}"
         except Exception:
             pass
         return ck or "default"
 
 
-    def _normalize_bindings(self, raw: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
-        """标准化并自动合并同一群聊的历史 Key（如 group:123 与 default:GroupMessage:123）。"""
+    def _normalize_bindings(self, raw: Dict[str, Any], seen: Optional[Dict[str, Any]] = None) -> Dict[str, Dict[str, Any]]:
+        """标准化并自动合并同一会话的历史 Key。
+
+        seen 传入时做启动迁移：老格式（无平台段）且被 seen 单一平台认领 -> 限定 key；
+        多认领/无认领保持原样，运行时靠回落 + 写时接管自愈。
+        """
         out: Dict[str, Dict[str, Any]] = {}
         if not isinstance(raw, dict):
             return out
@@ -543,36 +629,54 @@ class XbdocStoreMixin:
                 prompt = str(v.get("prompt") or "").strip()
                 shield = bool(v.get("shield", False))
                 force_sys = bool(v.get("force_system_prompt", False))
-                mode = self._normalize_mode(v.get("mode"))
+                mode = self._normalize_mode(v.get("mode")) or "reference"
                 # 保留未知字段（如 ignore_history），避免打开WebUI就丢配置
                 extra = {kk: vv for kk, vv in v.items() if kk not in (
                     "doc_ids", "prompt", "shield", "mode", "force_system_prompt")}
             else:
                 continue
 
+            if seen:
+                kind, plat, ident = self._split_session_key(ck)
+                if kind and not plat and ident:
+                    plats = self._seen_platforms(kind, ident, seen)
+                    if len(plats) == 1:
+                        ck = f"{kind}:{plats.pop()}:{ident}"
+
+            new_ent = {"doc_ids": doc_ids, "prompt": prompt, "shield": shield,
+                       "mode": mode, "force_system_prompt": force_sys, **extra}
             if ck not in out:
-                out[ck] = {"doc_ids": doc_ids, "prompt": prompt, "shield": shield, "mode": mode, "force_system_prompt": force_sys, **extra}
+                out[ck] = new_ent
             else:
-                cur = out[ck]
-                for did in doc_ids:
-                    if did not in cur["doc_ids"]:
-                        cur["doc_ids"].append(did)
-                if prompt and not cur.get("prompt"):
-                    cur["prompt"] = prompt
-                if shield:
-                    cur["shield"] = True
-                if force_sys:
-                    cur["force_system_prompt"] = True
-                if mode in ("system", "workspace"):
-                    cur["mode"] = mode
-                for kk, vv in extra.items():
-                    cur.setdefault(kk, vv)
+                self._merge_entries(out[ck], new_ent)
         return out
+
+
+    @staticmethod
+    def _seen_platforms(kind: str, ident: str, seen: Dict[str, Any]) -> set:
+        """seen 中认领该 (kind, id) 的平台集合（恰为 1 个时才可安全限定）"""
+        plats = set()
+        for meta in (seen or {}).values():
+            if not isinstance(meta, dict):
+                continue
+            is_priv = str(meta.get("kind") or "") == "private"
+            if is_priv != (kind == "private"):
+                continue
+            if str(meta.get("gid") or "").strip() != ident:
+                continue
+            p = str(meta.get("platform") or "").strip()
+            if p:
+                plats.add(p)
+        return plats
 
 
     def _session_keys(self, event: AstrMessageEvent) -> List[str]:
         ck = self._canonical_key(event)
         keys = [ck]
+        # 迁移兼容：新 key 未命中时回落老格式（老数据无平台段，不断连）
+        legacy = self._legacy_key(ck)
+        if legacy and legacy != ck:
+            keys.append(legacy)
         umo = str(getattr(event, "unified_msg_origin", "") or "").strip()
         for cand in (umo, self._canonical_key_str(umo)):
             if cand and cand not in keys:
@@ -580,11 +684,114 @@ class XbdocStoreMixin:
         return keys
 
 
-    def _get_entry(self, session_key: str) -> Dict[str, Any]:
+    @staticmethod
+    def _legacy_key(cks: str) -> str:
+        """限定 key 去平台段（group:plat:gid -> group:gid），供老数据回落；老格式原样返回。"""
+        kind, plat, ident = XbdocStoreMixin._split_session_key(cks)
+        if kind and plat and ident:
+            return f"{kind}:{ident}"
+        return cks
+
+    @staticmethod
+    def _merge_entries(cur: Dict[str, Any], old: Dict[str, Any]) -> Dict[str, Any]:
+        """同会话两条目合并（normalize 与接管共用）：doc 并集保序，开关取或，模式按强度。"""
+        merged_ids = list(cur.get("doc_ids", []))
+        for d in old.get("doc_ids", []):
+            if d not in merged_ids:
+                merged_ids.append(d)
+        cur["doc_ids"] = merged_ids
+        if not str(cur.get("prompt") or "").strip():
+            cur["prompt"] = str(old.get("prompt") or "")
+        for flag in ("shield", "force_system_prompt", "ignore_history"):
+            cur[flag] = bool(cur.get(flag)) or bool(old.get(flag))
+        if _MODE_PRIORITY.get(str(old.get("mode") or "reference"), 0) > \
+                _MODE_PRIORITY.get(str(cur.get("mode") or "reference"), 0):
+            cur["mode"] = old.get("mode")
+        if not cur.get("platform") and old.get("platform"):
+            cur["platform"] = old.get("platform")
+        # 其余未知字段只补不盖（创建时缺省已齐，此处多为 ignore_history 等开关的或合并）
+        for kk, vv in old.items():
+            if kk not in ("doc_ids", "prompt", "shield", "force_system_prompt",
+                          "ignore_history", "mode", "platform"):
+                cur.setdefault(kk, vv)
+        return cur
+
+    def _prefer_qualified(self, key: str, event: Any = None) -> str:
+        """老格式 key + 事件带平台 -> 限定候选；否则原样（是否接管由 _adopt_legacy 判定）。"""
+        kind, plat, ident = self._split_session_key(key)
+        if not kind or plat or not ident:
+            return key
+        if event is None:
+            return key
+        eplat = self._platform_of(event)
+        if eplat:
+            return f"{kind}:{eplat}:{ident}"
+        return key
+
+    def _adopt_legacy(self, qualified_key: str, event_platform: str = "") -> str:
+        """限定 key 接管同 id 老条目（合并后删老 key）。调用方需持 self._save_lock。
+
+        老条目已记录平台且与限定平台冲突时不合并（疑似不同会话），仅打日志。
+        """
+        kind, plat, ident = self._split_session_key(qualified_key)
+        if not kind or not plat or not ident:
+            return qualified_key
+        legacy = f"{kind}:{ident}"
+        old = self._bindings.get(legacy)
+        if not old or legacy == qualified_key:
+            return qualified_key
+        old_plat = str(old.get("platform") or "").strip()
+        if old_plat and old_plat != plat and old_plat != (event_platform or "").strip():
+            logger.warning(
+                f"[{PLUGIN_NAME}] 会话 {legacy} 已归属平台 {old_plat}，"
+                f"不并入 {qualified_key}（疑似跨平台同号），请手动确认绑定。"
+            )
+            return qualified_key
+        cur = self._bindings.get(qualified_key)
+        if cur is None:
+            self._bindings[qualified_key] = old
+        else:
+            self._merge_entries(cur, old)
+        self._bindings.pop(legacy, None)
+        self._prune_empty_entry(qualified_key)
+        logger.info(f"[{PLUGIN_NAME}] 会话已迁移 {legacy} -> {qualified_key}")
+        return qualified_key
+
+    def _writer_key(self, event: AstrMessageEvent) -> str:
+        """写路径统一 key：解析命中 -> 平台限定 -> 接管老条目。调用方需持 self._save_lock。"""
+        key, _ = self._resolve_session(event, create=False)
+        key = self._adopt_legacy(self._prefer_qualified(key, event), self._platform_of(event))
+        return key
+
+    def _qualify_session_key(self, raw_key: str) -> str:
+        """WebUI 手填 key 补平台限定：已限定原样；老格式按 seen 单一认领补足，多认领/无认领原样返回。"""
+        ck = self._canonical_key_str(raw_key)
+        kind, plat, ident = self._split_session_key(ck)
+        if not kind or plat or not ident:
+            return ck
+        plats = self._seen_platforms(kind, ident, self._seen_groups)
+        if len(plats) == 1:
+            qualified = f"{kind}:{plats.pop()}:{ident}"
+            logger.info(f"[{PLUGIN_NAME}] 会话 key 已补平台限定: {ck} -> {qualified}")
+            return qualified
+        if len(plats) > 1:
+            logger.warning(
+                f"[{PLUGIN_NAME}] 会话 {ck} 被多平台认领 {sorted(plats)}，"
+                f"保持原样，请在 WebUI 用完整 key（kind:platform:id）指定。"
+            )
+        return ck
+
+    def _get_entry(self, session_key: str, event: Any = None) -> Dict[str, Any]:
+        """取（无则建）会话条目；有 event 时顺手记录平台（纯元数据展示用，不参与 key）。"""
         ck = self._canonical_key_str(session_key)
-        return self._bindings.setdefault(ck, {
+        ent = self._bindings.setdefault(ck, {
             "doc_ids": [], "prompt": "", "shield": False, "mode": "reference", "force_system_prompt": False,
         })
+        if event is not None:
+            plat = self._platform_of(event)
+            if plat and not ent.get("platform"):
+                ent["platform"] = plat
+        return ent
 
 
     def _resolve_session(self, event_or_key: Any, create: bool = False) -> Tuple[str, Dict[str, Any]]:
@@ -621,12 +828,15 @@ class XbdocStoreMixin:
 
     @staticmethod
     def _normalize_mode(mode: str) -> str:
+        """归一化模式名；未知输入返回空串（调用方自行报错/回落，不静默串改）。"""
         m = str(mode or "").lower().strip()
-        if m in ("system", "sys", "强制", "提示词", "1"):
+        if m in ("system", "sys", "s", "强制", "提示词", "1"):
             return "system"
-        if m in ("workspace", "ws", "工作区", "沙箱", "3"):
+        if m in ("workspace", "ws", "w", "工作区", "沙箱", "3"):
             return "workspace"
-        return "reference"
+        if m in ("reference", "ref", "r", "参考", "仅参考", "资料", "0"):
+            return "reference"
+        return ""
 
 
     @staticmethod
@@ -677,10 +887,11 @@ class XbdocStoreMixin:
         }
 
 
-    def bind_docs(self, session_key: str, doc_ids: List[str]) -> List[str]:
+    @_locked
+    def bind_docs(self, session_key: str, doc_ids: List[str], event: Any = None) -> List[str]:
         """只改内存不落盘，调用方统一 save（避免一次绑定写两次文件）。"""
         valid = [d for d in doc_ids if d in self._index]
-        self._get_entry(session_key)["doc_ids"] = valid
+        self._get_entry(session_key, event)["doc_ids"] = valid
         return valid
 
 
@@ -706,21 +917,23 @@ class XbdocStoreMixin:
         return False
 
 
-    def set_session_prompt(self, session_key: str, prompt: str) -> Dict[str, Any]:
-        ent = self._get_entry(session_key)
+    @_locked
+    def set_session_prompt(self, session_key: str, prompt: str, event: Any = None) -> Dict[str, Any]:
+        ent = self._get_entry(session_key, event)
         ent["prompt"] = (prompt or "").strip()
         self._save_json(self.bindings_path, self._bindings)
         return ent
 
 
-    def set_session_mode(self, session_key: str, mode: str) -> Dict[str, Any]:
+    @_locked
+    def set_session_mode(self, session_key: str, mode: str, event: Any = None) -> Dict[str, Any]:
         # 文档生效模式必须有绑定文档才能切换，无文档时强制回落 reference
-        ent = self._get_entry(session_key)
+        ent = self._get_entry(session_key, event)
         if not [d for d in ent.get("doc_ids", []) if d in self._index]:
             ent["mode"] = "reference"
             self._save_json(self.bindings_path, self._bindings)
             return ent
-        ent["mode"] = self._normalize_mode(mode)
+        ent["mode"] = self._normalize_mode(mode) or "reference"
         self._save_json(self.bindings_path, self._bindings)
         return ent
 
@@ -737,14 +950,20 @@ class XbdocStoreMixin:
             return CONFIG_DEFAULTS.get(key, default)
 
 
-    def _cfg_int(self, key: str, default: int = 0) -> int:
+    def _cfg_int(self, key: str, default: Optional[int] = None) -> int:
+        """读正整数配置：非法值/<=0 时回落（显式 default 优先，其次 CONFIG_DEFAULTS）。"""
         try:
-            if not default:
-                default = int(CONFIG_DEFAULTS.get(key, 0))
-            v = int(self._cfg(key, default))
-            return v if v > 0 else default
+            fallback = int(CONFIG_DEFAULTS.get(key, 0))
         except Exception:
-            return default
+            fallback = 0
+        try:
+            d = fallback if default is None else int(default)
+            v = int(self._cfg(key, d))
+            if v > 0:
+                return v
+            return d if d > 0 else fallback
+        except Exception:
+            return fallback if fallback > 0 else 0
 
 
     def _cfg_no_limit(self, key: str) -> int:
