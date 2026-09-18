@@ -131,7 +131,10 @@ class XbdocWebAPIMixin:
 
     async def _api_doc_content(self):
         doc_id = request.query.get("doc_id", "", type=str)
-        chunk = request.query.get("chunk", 1, type=int)
+        try:
+            chunk = int(request.query.get("chunk", 1, type=int) or 1)
+        except Exception:
+            chunk = 1
         meta = self._index.get(doc_id)
         if not meta:
             return error_response("文档不存在", status_code=404)
@@ -235,6 +238,12 @@ class XbdocWebAPIMixin:
 
     def _find_all_bots(self) -> List[Any]:
         """定位平台适配器：优先走官方 platform_manager.platform_insts，其次事件缓存，最后有界泛遍历。"""
+        try:  # 定位结果缓存 5 分钟：fallback 遍历较重，实例列表极少变化
+            _cached = getattr(self, "_bots_cache", None) or {}
+            if _cached.get("targets") and (time.time() - float(_cached.get("ts", 0))) < 300:
+                return list(_cached["targets"])
+        except Exception:
+            pass
         targets: List[Any] = []
         added: set = set()
 
@@ -262,6 +271,7 @@ class XbdocWebAPIMixin:
         except Exception:
             pass
         if targets:
+            self._bots_cache = {"targets": list(targets), "ts": time.time()}
             return targets
 
         # 2. 消息事件里缓存的 bot（适配器实例）
@@ -271,6 +281,7 @@ class XbdocWebAPIMixin:
         except Exception:
             pass
         if targets:
+            self._bots_cache = {"targets": list(targets), "ts": time.time()}
             return targets
 
         # 3. 兜底：有界泛遍历（保留 *manager 等关键字，并设访问上限防卡顿）
@@ -316,11 +327,12 @@ class XbdocWebAPIMixin:
             _traverse(self.context, 0)
         except Exception:
             pass
+        self._bots_cache = {"targets": list(targets), "ts": time.time()}
         return targets
 
 
     async def _fetch_platform_groups(self) -> List[Dict[str, Any]]:
-        """主动向平台适配器拉取群组（并发调用，首个成功即停）。"""
+        """主动向平台适配器拉取群组（多适配器并发、整体超时熔断，首个成功集合即用）。"""
         import asyncio
         found_groups: Dict[str, Dict[str, Any]] = {}
         bots = self._find_all_bots()
@@ -340,11 +352,28 @@ class XbdocWebAPIMixin:
                 pass
             return None
 
-        for cand in bots[:5]:
-            tasks = [_call(cand, act) for act in actions]
+        async def _try_bot(cand):
             try:
-                results = await asyncio.gather(*tasks, return_exceptions=True)
+                results = await asyncio.gather(*[_call(cand, act) for act in actions], return_exceptions=True)
             except Exception:
+                results = []
+            return (cand, results)
+
+        # 全体并发 + 整体 18 秒熔断（超时自动取消子任务）；结果按适配器顺序取首个成功的，保持原有优先级语义
+        per_bot: List[Any] = []
+        try:
+            per_bot = await asyncio.wait_for(
+                asyncio.gather(*[_try_bot(b) for b in bots[:5]], return_exceptions=True),
+                timeout=18,
+            )
+        except Exception:
+            per_bot = []
+
+        for item in per_bot:
+            if not (isinstance(item, tuple) and len(item) == 2):
+                continue
+            cand, results = item
+            if not isinstance(results, list):
                 continue
             got = False
             for info in results:

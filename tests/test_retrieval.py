@@ -66,6 +66,40 @@ def test_bm25_edges():
     assert score_chunk_tf(tokenize("apple"), c) > 0  # 旧算法保留兼容
 
 
+def test_tokenize_cjk_ext():
+    # 日文假名/韩文/全角不再是零 token（旧正则只覆盖基本汉字块）；用码点构造，杜绝文件编码干扰
+    s = "".join(chr(c) for c in (
+        0x3053, 0x3093, 0x306B, 0x3061, 0x306F,  # こんにちは
+        0x4E16, 0x754C,  # 世界
+        0xD55C, 0xAE00,  # 한글
+        0xFF21, 0xFF22,  # ＡＢ全角
+    ))
+    toks = tokenize(s)
+    # 注意全角大写会被 lower() 转为全角小写（查询侧同样处理，对称可匹配）
+    assert toks == [chr(c) for c in (
+        0x3053, 0x3093, 0x306B, 0x3061, 0x306F, 0x4E16, 0x754C, 0xD55C, 0xAE00, 0xFF41, 0xFF42)], \
+        [hex(ord(t)) for t in toks]
+    assert tokenize("hello world") == ["hello", "world"]
+
+
+def test_docx_tables():
+    try:
+        import docx
+    except ImportError:
+        return  # 环境无 python-docx 时跳过（AstrBot 侧安装后生效）
+    import io
+    from xbdoc_retrieval import extract_text_from_bytes
+    doc = docx.Document()
+    doc.add_paragraph("正文段落")
+    t = doc.add_table(rows=1, cols=2)
+    t.cell(0, 0).text = "表左"
+    t.cell(0, 1).text = "表右"
+    buf = io.BytesIO()
+    doc.save(buf)
+    text = extract_text_from_bytes(".docx", buf.getvalue())
+    assert "正文段落" in text and "表左" in text and "表右" in text, text
+
+
 def test_truncate():
     assert truncate_text("abc", 10) == "abc"
     assert truncate_text("a" * 100, 10) == "a" * 10  # 过小上限只截不断言标记
@@ -84,5 +118,7 @@ if __name__ == "__main__":
     test_bm25_rare_term_wins()
     test_bm25_length_norm()
     test_bm25_edges()
+    test_tokenize_cjk_ext()
+    test_docx_tables()
     test_truncate()
     print("test_retrieval PASSED")

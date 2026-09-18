@@ -13,7 +13,12 @@ from typing import List
 # 纯函数：分词、切片、检索计分与文本提取
 # ======================================================================
 
-_TOKEN_RE = re.compile(r"[A-Za-z0-9_]+|[\u4e00-\u9fff]", re.UNICODE)
+_TOKEN_RE = re.compile(
+    r"[A-Za-z0-9_]+"
+    r"|[\u1100-\u11ff\u3040-\u30ff\u3130-\u318f\u3400-\u4dbf\u4e00-\u9fff"
+    r"\uac00-\ud7af\uf900-\ufaff\uff00-\uffef\U00020000-\U0002ebef]",
+    re.UNICODE,
+)
 ALLOWED_SUFFIXES = {
     ".md", ".markdown", ".txt", ".json", ".csv", ".log",
     ".yaml", ".yml", ".toml", ".ini", ".cfg",
@@ -22,7 +27,7 @@ ALLOWED_SUFFIXES = {
 
 
 def tokenize(text: str) -> List[str]:
-    """中英混合分词：英文按词、中文按单字，统一小写。"""
+    """多语言混合分词：英文按词，中文/假名/谚文/扩展汉字按单字，统一小写。"""
     return [t.lower() for t in _TOKEN_RE.findall(text or "")]
 
 
@@ -101,7 +106,8 @@ def score_chunk_bm25(
         idf_t = idf.get(t, 0.0)
         if idf_t <= 0:
             continue
-        w = 0.5 if len(t) == 1 and "一" <= t <= "鿿" else 1.0
+        # 单字非 ASCII（中文/假名/谚文等）降权，英文整词保持全重
+        w = 0.5 if len(t) == 1 and not t.isascii() else 1.0
         score += w * idf_t * (c * (k1 + 1.0)) / (c + norm)
     hits = sum(1 for t in unique_q if tf.get(t, 0) > 0)
     score *= 1.0 + 0.2 * (hits / max(1, len(unique_q)))
@@ -148,7 +154,14 @@ def extract_text_from_bytes(suffix: str, data: bytes) -> str:
         except ImportError as e:
             raise RuntimeError("缺少 python-docx 依赖，请 pip install python-docx 后重试。") from e
         doc = docx.Document(io.BytesIO(data))
-        return "\n".join(p.text.strip() for p in doc.paragraphs if p.text and p.text.strip())
+        parts = [p.text.strip() for p in doc.paragraphs if p.text and p.text.strip()]
+        for table in doc.tables:  # 表格内容同样入库，否则整表丢失
+            for row in table.rows:
+                for cell in row.cells:
+                    t = (cell.text or "").strip()
+                    if t:
+                        parts.append(t)
+        return "\n".join(parts)
     # 其他兜底当文本解码
     text = data.decode("utf-8", errors="ignore")
     if not text.strip():

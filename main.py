@@ -1,5 +1,6 @@
 """文档记忆助手插件：零 Embedding 检索 + 按群会话绑定 + 群独立提示词 + 大模型自动引用"""
 
+import asyncio
 import math
 import re
 import time
@@ -348,6 +349,17 @@ class XbdocPlugin(XbdocStoreMixin, XbdocCommandsMixin, XbdocWebAPIMixin, Star):
 
 
     # ---------- 聊天指令 ----------
+    @staticmethod
+    async def _is_admin(event: AstrMessageEvent) -> bool:
+        """管理员判定：兼容同步/协程两种 is_admin 实现；异常时放行（沿用旧语义，避免误锁管理员）。"""
+        try:
+            r = event.is_admin()
+            if asyncio.iscoroutine(r):
+                r = await r
+            return bool(r)
+        except Exception:
+            return True
+
     @filter.command("doc")
     async def doc_cmd(self, event: AstrMessageEvent):
         """文档记忆助手统一指令入口 /doc [子指令]"""
@@ -365,7 +377,7 @@ class XbdocPlugin(XbdocStoreMixin, XbdocCommandsMixin, XbdocWebAPIMixin, Star):
         admin_subs = {"bind", "unbind", "mode", "shield", "force", "prompt_set", "prompt_clear", "no"}
         if sub in admin_subs:
             try:
-                if event.get_group_id() and not event.is_admin():
+                if event.get_group_id() and not await self._is_admin(event):
                     yield event.plain_result("⚠️ 权限不足：该指令在群聊中仅限群主或管理员使用。")
                     return
             except Exception:

@@ -331,6 +331,102 @@ def test_inject_docs_splice_and_perf():
         assert "你是助理" in req.system_prompt, req.system_prompt
 
 
+def test_admin_check_handles_coroutine():
+    import tempfile as tf
+    from threading import Lock
+    p, _ = _make_plugin()
+    d = Path(tf.mkdtemp(prefix="xbdoc_t8_"))
+    p.data_dir = d
+    p.docs_dir = d / "docs"
+    p.docs_dir.mkdir(parents=True, exist_ok=True)
+    p.index_path = d / "index.json"
+    p.bindings_path = d / "bindings.json"
+    p.seen_path = d / "seen_groups.json"
+    p._save_lock = Lock()
+    p._index = {}
+    p._bindings = {}
+    p.config = {}
+
+    async def _yes():
+        return True
+
+    async def _no():
+        return False
+
+    # 协程 False：非管理员被拒（若 is_admin 被当同步值用，协程恒真值会导致放行）
+    ev = _fake_event(gid="123", umo="Group:123", text="/doc bind abc123")
+    ev.is_admin = _no
+    out = asyncio.run(_collect(p.doc_cmd(ev)))
+    assert any("权限不足" in r for r in out), out
+
+    # 协程 True：放行并走到绑定逻辑
+    ev2 = _fake_event(gid="123", umo="Group:123", text="/doc bind abc123")
+    ev2.is_admin = _yes
+    out2 = asyncio.run(_collect(p.doc_cmd(ev2)))
+    assert not any("权限不足" in r for r in out2), out2
+
+    # 同步旧实现同样可用
+    ev3 = _fake_event(gid="123", umo="Group:123", text="/doc bind abc123")
+    ev3.is_admin = lambda: True
+    out3 = asyncio.run(_collect(p.doc_cmd(ev3)))
+    assert not any("权限不足" in r for r in out3), out3
+
+
+def test_fetch_groups_concurrent_and_cached():
+    import asyncio as _aio
+    import tempfile as tf
+    import time as _time
+    from threading import Lock
+    p, _ = _make_plugin()
+    d = Path(tf.mkdtemp(prefix="xbdoc_t9_"))
+    p.data_dir = d
+    p.docs_dir = d / "docs"
+    p.docs_dir.mkdir(parents=True, exist_ok=True)
+    p.index_path = d / "index.json"
+    p.bindings_path = d / "bindings.json"
+    p.seen_path = d / "seen_groups.json"
+    p._save_lock = Lock()
+    p._seen_groups = {}
+    p._seen_save_ts = 0
+    p._bindings = {}
+    p._index = {}
+    p.config = {}
+    p.context = SimpleNamespace()
+
+    async def _empty(act=None):
+        await _aio.sleep(0.05)
+        return {"data": []}
+
+    async def _good(act=None):
+        await _aio.sleep(0.05)
+        return {"data": [{"group_id": "555", "group_name": "并发群"}]}
+
+    p._latest_bot = None
+    empty_bot = SimpleNamespace(call_action=_empty, platform_name="t1")
+    good_bot = SimpleNamespace(call_action=_good, platform_name="t2")
+    # 绕过 _find_all_bots：直接验证并发编排与首个成功语义
+    p._find_all_bots = lambda: [empty_bot, good_bot]  # noqa: E731
+    t0 = _time.time()
+    found = asyncio.run(p._fetch_platform_groups())
+    dt = _time.time() - t0
+    assert any(g["gid"] == "555" for g in found), found
+    assert dt < 10, dt  # 串行写法下 2 适配器×5 动作×0.05s 也远小于此；主要防回归成分钟级
+    assert p._seen_groups["555"]["group_name"] == "并发群"
+
+    # 定位缓存：拿掉适配器后 5 分钟内仍命中
+    del p._find_all_bots  # 恢复类方法（上面 monkeypatch 的是实例属性）
+    real_bots = [SimpleNamespace(call_action=_good, platform_name="t3")]
+    p._latest_bot = real_bots[0]
+    p.context = SimpleNamespace()
+    if hasattr(p, "_bots_cache"):
+        delattr(p, "_bots_cache")
+    first = p._find_all_bots()
+    assert first, "定位应命中事件缓存 bot"
+    p._latest_bot = None
+    second = p._find_all_bots()
+    assert [id(b) for b in second] == [id(b) for b in first], "缓存未生效"
+
+
 if __name__ == "__main__":
     test_mro()
     test_init_store_normalize_and_tmp_cleanup()
@@ -340,4 +436,6 @@ if __name__ == "__main__":
     test_private_seen_and_list()
     test_prompt_no_limit()
     test_inject_docs_splice_and_perf()
+    test_admin_check_handles_coroutine()
+    test_fetch_groups_concurrent_and_cached()
     print("test_plugin PASSED")
