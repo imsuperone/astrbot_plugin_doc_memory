@@ -258,10 +258,10 @@ class XbdocPlugin(Star):
             chara_name = str(d.get("name") or t_card.get("name") or "").strip()
             chara_greeting = str(d.get("first_mes") or t_card.get("first_mes") or "").strip()
             if chara_name and chara_name not in ("未命名角色", "未命名酒馆角色"):
-                filename = f"【酒馆】{chara_name}.md"
+                filename = f"【酒馆】{self._safe_filename(chara_name)}.md"
             else:
                 stem = Path(filename).stem
-                filename = f"【酒馆】{stem}.md"
+                filename = f"【酒馆】{self._safe_filename(stem)}.md"
             text = format_tavern_to_markdown(t_card).strip()
             suffix = ".md"
         else:
@@ -662,7 +662,11 @@ class XbdocPlugin(Star):
                 continue
             fname = str(meta.get("filename", "")).lower()
             fstem = Path(fname).stem.lower()
-            fname_hit = bool((fstem and fstem in q_lower) or (fname and fname in q_lower))
+            # 短文件名（如单字/数字）用 in 判断必误伤全量切片，需设长度门限
+            fname_hit = bool(
+                (len(fstem) >= 2 and fstem and fstem in q_lower)
+                or (len(fname) >= 4 and fname and fname in q_lower)
+            )
 
             chunks = self._load_chunks(did)
             counters = self._get_chunk_counters(did)
@@ -1256,7 +1260,7 @@ class XbdocPlugin(Star):
             f"• 绑定文档：{len(doc_ids)} 篇\n"
             f"• 专属提示词：\n{preview or '（未设置）'}\n\n"
             "⚙️ 管理指令：\n"
-            "• /doc mode system | reference\n"
+            "• /doc mode system | workspace | reference\n"
             "• /doc shield on | off\n"
             "• /doc prompt_set <内容>\n"
             "• /doc prompt_clear"
@@ -1349,7 +1353,8 @@ class XbdocPlugin(Star):
             yield event.plain_result("❌ 用法错误：/doc shield on（开启） | off（关闭）")
             return
 
-        self.set_session_shield(key, target_shield)
+        ent = self._get_entry(key)
+        ent["shield"] = bool(target_shield)
         self._prune_empty_entry(key)
         self._save_json(self.bindings_path, self._bindings)
         if target_shield:
@@ -1374,7 +1379,7 @@ class XbdocPlugin(Star):
             return
 
         ent = self._get_entry(key)
-        ent["force_system_prompt"] = target
+        ent["force_system_prompt"] = bool(target)
         self._prune_empty_entry(key)
         self._save_json(self.bindings_path, self._bindings)
         if target:
@@ -1585,6 +1590,10 @@ class XbdocPlugin(Star):
 
         self._prune_empty_entry(key)
         self._save_json(self.bindings_path, self._bindings)
+        # prune 可能已删除空条目，此时用孤儿 ent 回包会与实际落盘不一致，需重取
+        ent = self._bindings.get(key) or {
+            "prompt": "", "shield": False, "force_system_prompt": False, "mode": "reference",
+        }
         return json_response({
             "ok": True, "session_key": key, "doc_ids": valid,
             "prompt": ent.get("prompt", ""),
@@ -1729,7 +1738,7 @@ class XbdocPlugin(Star):
                             "member_count": m_count,
                             "platform": p_name,
                             "last_seen": int(time.time()),
-                            "msg_count": m_count,
+                            "msg_count": 0,
                         }
                     got = True
             if got:
@@ -1739,7 +1748,7 @@ class XbdocPlugin(Star):
         for gid, item in found_groups.items():
             ent = self._seen_groups.setdefault(gid, {
                 "gid": gid, "group_name": item["group_name"], "platform": item["platform"],
-                "first_seen": now, "last_seen": now, "msg_count": item["member_count"],
+                "first_seen": now, "last_seen": now, "msg_count": 0,
             })
             if item["group_name"]:
                 ent["group_name"] = item["group_name"]

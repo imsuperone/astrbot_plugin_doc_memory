@@ -26,7 +26,7 @@ def parse_tavern_card(data: bytes) -> Optional[dict]:
     """解析酒馆 (SillyTavern) 角色卡或预设（支持 JSON 与 PNG 内嵌元数据卡）。"""
     # 1. 尝试 JSON 格式角色卡 / 预设
     try:
-        text = data.decode("utf-8", errors="ignore").strip()
+        text = data.decode("utf-8", errors="ignore").lstrip("\ufeff").strip()
         if text.startswith("{") and text.endswith("}"):
             obj = json.loads(text)
             if isinstance(obj, dict):
@@ -125,6 +125,9 @@ def chunk_text(text: str, chunk_size: int = 1500, overlap: int = 200) -> List[st
             if buf:
                 chunks.append(buf)
                 buf = (buf[-overlap:] + "\n" + p).strip() if overlap else p
+            else:
+                # buf 为空但单段已超长：不能丢弃，直接以该段为起点再硬切
+                buf = p
             while len(buf) > chunk_size:
                 chunks.append(buf[:chunk_size])
                 buf = buf[chunk_size - overlap:].strip() if overlap else buf[chunk_size:].strip()
@@ -186,7 +189,15 @@ def extract_text_from_bytes(suffix: str, data: bytes) -> str:
         except ImportError as e:
             raise RuntimeError("缺少 pypdf 依赖，请 pip install pypdf 后重试。") from e
         reader = PdfReader(io.BytesIO(data))
-        return "\n\n".join(p.extract_text().strip() for p in reader.pages if p.extract_text())
+        texts = []
+        for p in reader.pages:
+            try:
+                t = p.extract_text()
+            except Exception:
+                continue
+            if t and t.strip():
+                texts.append(t.strip())
+        return "\n\n".join(texts)
     if suffix == ".docx":
         try:
             import docx
