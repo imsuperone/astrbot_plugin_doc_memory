@@ -485,6 +485,10 @@
 
           const list = res.groups || res.data?.groups || [];
           const newCount = res.new_fetched !== undefined ? res.new_fetched : list.length;
+          // 后端 debug 直出拉群失败原因（0 适配器/超时/空返回/异常原文），不再靠猜
+          const dbg = res.debug || res.data?.debug || {};
+          const bad = (dbg.details || []).filter((d) => !/: ok\(/.test(d)).slice(0, 2);
+          const reason = `（找到适配器 ${dbg.bots ?? "?"} 个${bad.length ? "；" + bad.join("；") : ""}）`;
           if (list.length) {
             groupsCache = list;
           } else {
@@ -497,9 +501,9 @@
           if (newCount > 0) {
             showToast(`✅ 成功从适配器拉取到 ${newCount} 个群聊（共收录 ${groupsCache.length} 个）！`, 3500);
           } else if (groupsCache.length > 0) {
-            showToast(`💡 适配器未返回新群，已为您列出 ${groupsCache.length} 个已知群聊`, 4000);
+            showToast(`💡 适配器未返回新群${reason}，已为您列出 ${groupsCache.length} 个已知群聊`, 6000);
           } else {
-            showToast(`💡 提示：当前协议若不支持拉取群清单（如QQ官方Bot/Telegram/Discord），在群里发一条消息机器人即可自动记录群号，或直接手填 group:群号。`, 6000);
+            showToast(`💡 拉群无结果${reason}。协议不支持时在群里发一条消息即可自动记录，或直接手填 group:群号。`, 7000);
           }
         } catch (err) {
           showToast("获取群聊列表失败: " + err.message);

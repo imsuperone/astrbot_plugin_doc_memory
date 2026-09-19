@@ -327,10 +327,11 @@ def test_fetch_groups_concurrent_and_cached():
     # 绕过 _find_all_bots：直接验证并发编排与首个成功语义
     p._find_all_bots = lambda: [empty_bot, good_bot]  # noqa: E731
     t0 = _time.time()
-    found = asyncio.run(p._fetch_platform_groups())
+    found, diag = asyncio.run(p._fetch_platform_groups())
     dt = _time.time() - t0
     assert any(g["gid"] == "555" for g in found), found
     assert dt < 10, dt  # 串行写法下 2 适配器×5 动作×0.05s 也远小于此；主要防回归成分钟级
+    assert diag["bots"] == 2 and any("ok(" in d for d in diag["details"]), diag
     assert p._seen_groups["group:t2:555"]["group_name"] == "并发群"
 
     # 定位缓存：拿掉适配器后 5 分钟内仍命中

@@ -399,26 +399,42 @@ class XbdocWebAPIMixin:
         return targets
 
 
-    async def _fetch_platform_groups(self) -> List[Dict[str, Any]]:
-        """主动向平台适配器拉取群组（多适配器并发、整体超时熔断，首个成功集合即用）。"""
+    async def _fetch_platform_groups(self):
+        """主动向平台适配器拉取群组（多适配器并发、整体超时熔断）。
+
+        返回 (groups, diag)：diag 记录适配器个数与每个动作的结果摘要，
+        拉不到群时看日志/回包 debug 即可定位（0 适配器/超时/空返回/异常原文）。
+        """
         import asyncio
         found_groups: Dict[str, Dict[str, Any]] = {}
         bots = self._find_all_bots()
+        diag: List[str] = [f"adapters={len(bots)}"]
 
         actions = ["get_group_list", "getGroupList", "get_groups", "list_groups", "get_joined_groups"]
 
         async def _call(cand, act):
+            pname = str(getattr(cand, "platform_name", "") or getattr(cand, "name", "") or "?")
             try:
                 if callable(getattr(cand, "call_action", None)):
-                    return await asyncio.wait_for(cand.call_action(act), timeout=5)
-                if callable(getattr(cand, "call_api", None)):
-                    return await asyncio.wait_for(cand.call_api(act), timeout=5)
-                fn = getattr(cand, act, None)
-                if callable(fn):
-                    return await asyncio.wait_for(fn(), timeout=5)
-            except Exception:
-                pass
-            return None
+                    r = await asyncio.wait_for(cand.call_action(act), timeout=5)
+                elif callable(getattr(cand, "call_api", None)):
+                    r = await asyncio.wait_for(cand.call_api(act), timeout=5)
+                else:
+                    fn = getattr(cand, act, None)
+                    if not callable(fn):
+                        return None
+                    r = await asyncio.wait_for(fn(), timeout=5)
+                n = -1
+                if isinstance(r, dict):
+                    d = r.get("data", r)
+                    n = len(d) if isinstance(d, list) else -1
+                elif isinstance(r, list):
+                    n = len(r)
+                diag.append(f"{pname}.{act}: ok(n={n})")
+                return r
+            except Exception as e:
+                diag.append(f"{pname}.{act}: {type(e).__name__}: {str(e)[:120]}")
+                return None
 
         async def _try_bot(cand):
             try:
@@ -454,8 +470,6 @@ class XbdocWebAPIMixin:
                         gid = str(g.get("group_id") or g.get("gid") or g.get("id") or "").strip()
                         if not gid:
                             continue
-                        if gid in found_groups:
-                            continue  # 多适配器同号群保留首个来源，避免反复覆盖
                         gname = str(g.get("group_name") or g.get("name") or g.get("title") or "").strip()
                         try:
                             m_count = int(g.get("member_count") or g.get("members_count") or 0)
@@ -494,7 +508,8 @@ class XbdocWebAPIMixin:
         if found_groups:
             self._save_seen()
 
-        return list(found_groups.values())
+        logger.info(f"[{PLUGIN_NAME}] 拉群诊断: " + "; ".join(diag[:25]))
+        return list(found_groups.values()), {"bots": len(bots), "details": diag}
 
 
     def _get_all_merged_groups(self, q: str = "", limit: int = 60) -> List[Dict[str, Any]]:
@@ -574,13 +589,14 @@ class XbdocWebAPIMixin:
 
     async def _api_fetch_groups(self):
         try:
-            fetched = await self._fetch_platform_groups()
+            fetched, diag = await self._fetch_platform_groups()
             all_groups = self._get_all_merged_groups("", 200)
             return json_response({
                 "ok": True,
                 "new_fetched": len(fetched),
                 "count": len(all_groups),
                 "groups": all_groups,
+                "debug": diag,
             })
         except Exception as e:
             logger.warning(f"[{PLUGIN_NAME}] 主动拉取机器人群列表失败: {e}")
@@ -591,6 +607,7 @@ class XbdocWebAPIMixin:
                 "count": len(all_groups),
                 "groups": all_groups,
                 "warning": str(e),
+                "debug": {"bots": -1, "details": [f"fetch crashed: {type(e).__name__}: {e}"]},
             })
 
 
